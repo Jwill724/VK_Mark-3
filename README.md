@@ -125,12 +125,17 @@ git clone https://github.com/Jwill724/VK_Mark-3.git
 cd VK_Mark-3
 cmake -S . -B build -G "Visual Studio 18 2026" -A x64
 cmake --build build --config Release
+```
 
-### Assets
+## Assets
 
-Bistro and San Miguel assets:
+### Bistro and San Miguel
+
+Bistro and San Miguel assets can be downloaded here:
 
 https://www.dropbox.com/scl/fo/2h6jnyho16z7w0lpjah9w/AIV4BUCfhIbN1sC1hEYl8BI?rlkey=4zdox8dw65t7n5hejpvm4nepz&st=q4nrzvub&dl=0
+
+### Intel Sponza
 
 Intel Sponza can be downloaded from Intel's Graphics Research samples and loaded directly as glTF:
 
