@@ -1,4 +1,6 @@
 #include "pch.h"
+#include <stdexcept>
+#include <fstream>
 
 #include "BindlessImageTable.h"
 #include "ImageSpecs.h"
@@ -6,6 +8,7 @@
 #include "../ImageUtils.h"
 #include "Staging.h"
 #include "TextureStaging.h"
+#include "../../scene/LightUnits.h"
 
 namespace IS = ImageSpecs;
 
@@ -63,24 +66,53 @@ static constexpr uint32_t HILBERT_WIDTH = 1u << HILBERT_LEVEL;
 static uint32_t HilbertIndex(uint32_t posX, uint32_t posY)
 {
 	uint32_t index = 0u;
-	for (uint32_t curLevel = HILBERT_WIDTH / 2u; curLevel > 0u; curLevel /= 2u)
+
+	for (uint32_t curLevel = HILBERT_WIDTH / 2u;
+		curLevel > 0u;
+		curLevel /= 2u)
 	{
-		uint32_t regionX = (posX & curLevel) > 0u;
-		uint32_t regionY = (posY & curLevel) > 0u;
+		const uint32_t regionX = (posX & curLevel) != 0u;
+		const uint32_t regionY = (posY & curLevel) != 0u;
+
 		index += curLevel * curLevel * ((3u * regionX) ^ regionY);
+
 		if (regionY == 0u)
 		{
 			if (regionX == 1u)
 			{
-				posX = static_cast<uint32_t>(HILBERT_WIDTH - 1u) - posX;
-				posY = static_cast<uint32_t>(HILBERT_WIDTH - 1u) - posY;
+				posX = HILBERT_WIDTH - 1u - posX;
+				posY = HILBERT_WIDTH - 1u - posY;
 			}
+
+			const uint32_t temp = posX;
+			posX = posY;
+			posY = temp;
 		}
-		uint32_t temp = posX;
-		posX = posY;
-		posY = temp;
 	}
+
 	return index;
+}
+
+// Headerless, interleaved RG8 atlas. Using raw bytes avoids image-loader
+// flip, channel conversion, and gamma settings changing the STBN sequence.
+static std::vector<uint8_t> LoadShadowSTBNAtlas()
+{
+	constexpr size_t atlasBytes = 1024u * 1024u * 2u;
+	constexpr const char* path = "res/assets/noise/shadow_stbn_128x128x64.rg8";
+
+	std::ifstream input(path, std::ios::binary | std::ios::ate);
+	if (!input)
+		throw std::runtime_error("Could not open shadow STBN atlas: res/assets/noise/shadow_stbn_128x128x64.rg8");
+
+	if (input.tellg() != static_cast<std::streamoff>(atlasBytes))
+		throw std::runtime_error("Shadow STBN atlas must contain exactly 2097152 bytes (1024x1024 RG8)");
+
+	std::vector<uint8_t> pixels(atlasBytes);
+	input.seekg(0, std::ios::beg);
+	if (!input.read(reinterpret_cast<char*>(pixels.data()), static_cast<std::streamsize>(pixels.size())))
+		throw std::runtime_error("Failed to read shadow STBN atlas");
+
+	return pixels;
 }
 
 // ---------
@@ -115,7 +147,6 @@ static glm::vec3 CieXyzFit(float w)
 
 void BindlessImageTable::Init(
 	Extents3D drawExtent,
-	uint32_t  environmentSetCount,
 	RD::ShadowQuality shadowQuality,
 	VkDevice  device,
 	Allocator& allocator)
@@ -124,8 +155,9 @@ void BindlessImageTable::Init(
 	CreateRenderTargets(drawExtent, allocator);
 	CreateShadowMaps(shadowQuality, allocator);
 	CreateFroxelFogTargets(allocator);
+	CreateAtmosphereTargets(allocator);
+	CreateRenderTargetGroup(IS::ImageGroup::WorldProbes, allocator);
 	CreateStaticTextures(allocator);
-	CreateEnvironmentSets(environmentSetCount, allocator);
 }
 
 void BindlessImageTable::Shutdown(VkDevice device, Allocator& allocator)
@@ -134,8 +166,9 @@ void BindlessImageTable::Shutdown(VkDevice device, Allocator& allocator)
 	FreeRenderTargets(allocator);
 	FreeShadowMaps(allocator);
 	FreeFroxelFogTargets(allocator);
+	FreeAtmosphereTargets(allocator);
+	FreeRenderTargetGroup(IS::ImageGroup::WorldProbes, allocator);
 	FreeStaticTextures(allocator);
-	FreeEnvironmentSets(allocator);
 	FreeSamplers(device);
 	m_assetTextures.clear();
 }
@@ -147,13 +180,34 @@ void BindlessImageTable::Shutdown(VkDevice device, Allocator& allocator)
 void BindlessImageTable::CreateRenderTargetGroup(IS::ImageGroup group, Allocator& allocator)
 {
 	const IS::ImageExtentContext ctx{ m_drawExtent, m_csmAtlasRes };
+	const bool updateCombinedRange = IsRenderTargetCombinedRangeBuilt();
+	std::unique_lock combinedLock(m_combinedMutex, std::defer_lock);
+	if (updateCombinedRange)
+		combinedLock.lock();
 
 	for (size_t i = 0; i < RD::RENDER_TARGET_COUNT; ++i)
 	{
 		const IS::ImageSpec& spec = IS::kRenderTargets[i];
 		if (spec.group != group) continue;
 
-		m_renderTargets[i] = allocator.AllocateImage(IS::MakeImageDesc(spec, ctx));
+		AllocatedImage image = allocator.AllocateImage(IS::MakeImageDesc(spec, ctx));
+
+		if (updateCombinedRange)
+		{
+			const auto slot = static_cast<RD::Renderer_RenderTarget>(i);
+			const uint32_t bindlessID = GetRenderTargetCombinedID(slot);
+			image.m_bindlessID = bindlessID;
+			m_renderTargets[i] = std::move(image);
+			if (bindlessID != UINT32_MAX)
+				UpdateCombinedLocked(
+					bindlessID,
+					m_renderTargets[i].m_imageView,
+					ResolveRenderTargetSampler(slot));
+		}
+		else
+		{
+			m_renderTargets[i] = std::move(image);
+		}
 	}
 
 	MarkDirty();
@@ -201,6 +255,22 @@ void BindlessImageTable::FreeShadowMaps(Allocator& allocator)
 	m_cachedCsmAtlasInfo = {};
 	m_csmAtlasRes = 0u;
 	m_bAreShadowsCreated = false;
+}
+
+void BindlessImageTable::CreateAtmosphereTargets(Allocator& allocator)
+{
+	if (m_bAreAtmosphereTargetsCreated) return;
+
+	CreateRenderTargetGroup(IS::ImageGroup::Atmosphere, allocator);
+	m_bAreAtmosphereTargetsCreated = true;
+}
+
+void BindlessImageTable::FreeAtmosphereTargets(Allocator& allocator)
+{
+	if (!m_bAreAtmosphereTargetsCreated) return;
+
+	FreeRenderTargetGroup(IS::ImageGroup::Atmosphere, allocator);
+	m_bAreAtmosphereTargetsCreated = false;
 }
 
 void BindlessImageTable::CreateFroxelFogTargets(Allocator& allocator)
@@ -330,7 +400,26 @@ void BindlessImageTable::UpdateRenderTargets(Extents3D drawExtent, Allocator& al
 
 void BindlessImageTable::SetRenderTarget(RD::Renderer_RenderTarget slot, AllocatedImage image)
 {
-	m_renderTargets[Index(slot)] = std::move(image);
+	const size_t index = Index(slot);
+
+	if (IsRenderTargetCombinedRangeBuilt())
+	{
+		const uint32_t bindlessID = GetRenderTargetCombinedID(slot);
+		image.m_bindlessID = bindlessID;
+		m_renderTargets[index] = std::move(image);
+
+		std::scoped_lock lock(m_combinedMutex);
+		if (bindlessID != UINT32_MAX)
+			UpdateCombinedLocked(
+				bindlessID,
+				m_renderTargets[index].m_imageView,
+				ResolveRenderTargetSampler(slot));
+	}
+	else
+	{
+		m_renderTargets[index] = std::move(image);
+	}
+
 	MarkDirty();
 }
 
@@ -488,9 +577,9 @@ size_t BindlessImageTable::CalcStaticTexturesStagingSize() const
 	for (const auto& tex : m_staticTextures)
 	{
 		if (!tex.IsValid()) continue;
-		const size_t w      = tex.Width();
-		const size_t h      = tex.Height();
-		const size_t d      = std::max(tex.Depth(), 1u);
+		const size_t w = tex.Width();
+		const size_t h = tex.Height();
+		const size_t d = std::max(tex.Depth(), 1u);
 		const size_t pixels = w * h * d * tex.m_pixelBytes;
 		total += AllocatedBuffer::AlignUp(pixels, static_cast<size_t>(16));
 	}
@@ -502,11 +591,11 @@ void BindlessImageTable::UploadStaticTextures(StagingBuffer& staging, VkCommandB
 	auto& st = m_staticTextures;
 
 	// --- 1x1 RGBA8 trivial textures ---
-	const uint32_t white       = glm::packUnorm4x8(glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
-	const uint32_t flatNormal  = glm::packUnorm4x8(glm::vec4(0.5f, 0.5f, 1.0f, 1.0f));
-	const uint32_t black       = glm::packUnorm4x8(glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+	const uint32_t white = glm::packUnorm4x8(glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+	const uint32_t flatNormal = glm::packUnorm4x8(glm::vec4(0.5f, 0.5f, 1.0f, 1.0f));
+	const uint32_t black = glm::packUnorm4x8(glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
 	const uint8_t  metalRough[4] = { 0, static_cast<uint8_t>(0.5f * 255), 0, 255 };
-	const uint32_t dummy   = 0u;
+	const uint32_t dummy = 0u;
 	const uint8_t  dummyU8 = 0u;
 
 	// --- Checkerboard 16x16 RGBA8 ---
@@ -549,9 +638,12 @@ void BindlessImageTable::UploadStaticTextures(StagingBuffer& staging, VkCommandB
 		for (int y = 0; y < 64; ++y)
 			hilbertLut[static_cast<size_t>(x + 64 * y)] = static_cast<uint16_t>(HilbertIndex(x, y));
 
+	// --- Shadow STBN: all 64 frames, 1024x1024 RG8 atlas ---
+	const std::vector<uint8_t> shadowSTBN = LoadShadowSTBNAtlas();
+
 	// --- Cookie gobo R8 from disk ---
 	int cookieW, cookieH, cookieCh;
-	stbi_uc* cookieData = stbi_load("res/assets/light_cookie.png", &cookieW, &cookieH, &cookieCh, 1);
+	stbi_uc* cookieData = stbi_load("res/assets/flashlight_cookie/light_cookie.png", &cookieW, &cookieH, &cookieCh, 1);
 	ASSERT(cookieData && "Failed to load light_cookie.png");
 
 	TextureUploadDesc uploads[] =
@@ -574,6 +666,8 @@ void BindlessImageTable::UploadStaticTextures(StagingBuffer& staging, VkCommandB
 		  .pixelBytes = st[Index(RD::Renderer_Texture::RainbowLut)].m_pixelBytes,      .strategy = MipStrategy::SingleLevel },
 		{.image = &st[Index(RD::Renderer_Texture::HilbertCurveLut)], .pixelData = hilbertLut.data(),
 		  .pixelBytes = st[Index(RD::Renderer_Texture::HilbertCurveLut)].m_pixelBytes, .strategy = MipStrategy::SingleLevel },
+		{.image = &st[Index(RD::Renderer_Texture::ShadowSTBN)],      .pixelData = shadowSTBN.data(),
+		  .pixelBytes = st[Index(RD::Renderer_Texture::ShadowSTBN)].m_pixelBytes,    .strategy = MipStrategy::SingleLevel },
 		{.image = &st[Index(RD::Renderer_Texture::CookieGobo)],      .pixelData = cookieData,
 		  .pixelBytes = st[Index(RD::Renderer_Texture::CookieGobo)].m_pixelBytes,      .strategy = MipStrategy::SingleLevel },
 	};
@@ -635,7 +729,7 @@ void BindlessImageTable::CreateEnvironmentSets(uint32_t setCount, Allocator& all
 
 void BindlessImageTable::PreallocateEquirects(
 	std::span<const char* const> hdrPaths,
-	Allocator&                   allocator)
+	Allocator& allocator)
 {
 	ASSERT(hdrPaths.size() <= m_environmentSets.size());
 
@@ -649,24 +743,65 @@ void BindlessImageTable::PreallocateEquirects(
 		m_environmentSets[i].equirect = allocator.AllocateImage(ImageDesc{
 			.format = Vulkan_Format::RGBA32F,
 			.extent = { static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1 },
-			.usage  = Vulkan_ImageUsage::ComputeRWTransfer
-		});
+			.usage = Vulkan_ImageUsage::ComputeRWTransfer
+			});
 
 		ASSERT(m_environmentSets[i].equirect.IsValid() &&
 			"PreallocateEquirects: image allocation failed");
 	}
 }
 
+static float ComputeSkyScale(const float* pixels, uint32_t width, uint32_t height)
+{
+	const size_t texelCount = static_cast<size_t>(width) * height;
+
+	std::vector<float> rowWeights(height);
+	for (uint32_t y = 0; y < height; ++y)
+		rowWeights[y] = std::sin((static_cast<float>(y) + 0.5f) / static_cast<float>(height) * glm::pi<float>());
+
+	auto weightedMean = [&](float rejectAbove) -> float
+		{
+			double sum = 0.0;
+			double weightSum = 0.0;
+
+			for (uint32_t y = 0; y < height; ++y)
+			{
+				const float w = rowWeights[y];
+				const float* row = pixels + static_cast<size_t>(y) * width * 4u;
+
+				for (uint32_t x = 0; x < width; ++x)
+				{
+					const float* px = row + static_cast<size_t>(x) * 4u;
+					const float lum = 0.2126f * px[0] + 0.7152f * px[1] + 0.0722f * px[2];
+
+					if (lum > rejectAbove) continue;
+
+					sum += static_cast<double>(lum) * w;
+					weightSum += w;
+				}
+			}
+
+			return weightSum > 0.0 ? static_cast<float>(sum / weightSum) : 0.0f;
+		};
+
+	const float rawMean = weightedMean(std::numeric_limits<float>::max());
+	if (rawMean <= 1e-6f) return 1.0f;
+
+	const float skyMean = weightedMean(rawMean * 50.0f);
+
+	return LightUnits::SKY_CLEAR_DAY / std::max(skyMean, 1e-6f);
+}
+
 void BindlessImageTable::UploadEquirects(
 	std::span<const char* const> hdrPaths,
-	Allocator&                   allocator,
+	Allocator& allocator,
 	VkCommandBuffer              cmd)
 {
 	ASSERT(hdrPaths.size() <= m_environmentSets.size());
 
 	struct LoadedHDR
 	{
-		float*   pixels      = nullptr;
+		float* pixels = nullptr;
 		uint32_t envSetIndex = 0;
 	};
 
@@ -684,13 +819,16 @@ void BindlessImageTable::UploadEquirects(
 		float* pixels = stbi_loadf(hdrPaths[i], &w, &h, &ch, 4);
 		ASSERT(pixels && "UploadEquirects: failed to load HDR pixels");
 
+		m_environmentSets[i].skyScale = ComputeSkyScale(
+			pixels, static_cast<uint32_t>(w), static_cast<uint32_t>(h));
+
 		loaded.push_back({ pixels, i });
 		uploads.emplace_back(TextureUploadDesc{
-			.image      = &m_environmentSets[i].equirect,
-			.pixelData  = pixels,
+			.image = &m_environmentSets[i].equirect,
+			.pixelData = pixels,
 			.pixelBytes = m_environmentSets[i].equirect.m_pixelBytes,
-			.strategy   = MipStrategy::SingleLevel
-		});
+			.strategy = MipStrategy::SingleLevel
+			});
 	}
 
 	allocator.GlobalStaging.ExecuteTextureBatch(cmd, uploads);
@@ -729,7 +867,7 @@ void BindlessImageTable::AddEnvironmentSet(EnvironmentSet envSet)
 	{
 		if (!m_environmentSets[i].IsValid())
 		{
-			envSet.setIndex      = i;
+			envSet.setIndex = i;
 			m_environmentSets[i] = std::move(envSet);
 			MarkDirty();
 			return;
@@ -807,14 +945,14 @@ uint32_t BindlessImageTable::ResolveAssetSampler(const SamplerDesc& desc, VkDevi
 {
 	for (uint32_t i = 0; i < static_cast<uint32_t>(m_assetSamplers.size()); ++i)
 	{
-		if (m_assetSamplerDescs[i].isLinear    == desc.isLinear   &&
+		if (m_assetSamplerDescs[i].isLinear == desc.isLinear &&
 			m_assetSamplerDescs[i].isMipMapped == desc.isMipMapped &&
-			m_assetSamplerDescs[i].anisotropy  == desc.anisotropy)
+			m_assetSamplerDescs[i].anisotropy == desc.anisotropy)
 			return i;
 	}
 
-	VkFilter filter    = desc.isLinear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
-	VkSamplerMipmapMode mipMode  = desc.isMipMapped
+	VkFilter filter = desc.isLinear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+	VkSamplerMipmapMode mipMode = desc.isMipMapped
 		? VK_SAMPLER_MIPMAP_MODE_LINEAR
 		: VK_SAMPLER_MIPMAP_MODE_NEAREST;
 	float maxLod = desc.isMipMapped ? VK_LOD_CLAMP_NONE : 0.0f;
@@ -843,8 +981,8 @@ VkSampler BindlessImageTable::ResolveDefaultAssetSampler(const AllocatedImage& i
 std::vector<uint32_t> BindlessImageTable::UploadAssetTextures(
 	SceneUploadBatch& batch,
 	VkDevice          device,
-	Allocator&        allocator,
-	StagingBuffer&    staging,
+	Allocator& allocator,
+	StagingBuffer& staging,
 	VkCommandBuffer   cmd)
 {
 	std::vector<uint32_t> ownedSlots;
@@ -930,6 +1068,7 @@ std::vector<uint32_t> BindlessImageTable::UploadAssetTextures(
 uint32_t BindlessImageTable::PushCombinedLocked(VkImageView view, VkSampler sampler)
 {
 	ASSERT(view != VK_NULL_HANDLE && sampler != VK_NULL_HANDLE);
+	if (view == VK_NULL_HANDLE || sampler == VK_NULL_HANDLE) return UINT32_MAX;
 	auto key = ImageViewSamplerKey{ view, sampler };
 	if (auto it = m_combinedViewHashToID.find(key); it != m_combinedViewHashToID.end())
 		return it->second;
@@ -995,21 +1134,147 @@ void BindlessImageTable::UpdateCombinedLocked(uint32_t index, VkImageView view, 
 	m_combinedViewHashToID[ImageViewSamplerKey{ view, sampler }] = index;
 }
 
-void BindlessImageTable::RegisterShadowMapsAsCombined(VkSampler shadowSampler)
+bool BindlessImageTable::IsRenderTargetCombinedRangeBuilt() const noexcept
+{
+	return m_bRenderTargetsRegistered;
+}
+
+VkSampler BindlessImageTable::ResolveRenderTargetSampler(RD::Renderer_RenderTarget slot) const
+{
+	switch (slot)
+	{
+	case RD::Renderer_RenderTarget::DirectionalCSMAtlas:
+	case RD::Renderer_RenderTarget::FlashlightShadowMap:
+	case RD::Renderer_RenderTarget::VolumetricShadowMap:
+		return GetSampler(RD::Renderer_Sampler::ShadowMap);
+
+	case RD::Renderer_RenderTarget::HiZ:
+	case RD::Renderer_RenderTarget::LinearizedHiZ:
+		return GetSampler(RD::Renderer_Sampler::HiZ);
+
+	case RD::Renderer_RenderTarget::Visibility:
+	case RD::Renderer_RenderTarget::ShadowInvalidMask:
+	case RD::Renderer_RenderTarget::GBufferNormalMaterial:
+		return GetSampler(RD::Renderer_Sampler::NearestClamp);
+
+	case RD::Renderer_RenderTarget::BloomMipchain:
+		return GetSampler(RD::Renderer_Sampler::LinearLodClamp);
+
+	default:
+		return GetSampler(RD::Renderer_Sampler::LinearClamp);
+	}
+}
+
+void BindlessImageTable::RegisterRenderTargetsAsCombined()
 {
 	std::scoped_lock lock(m_combinedMutex);
-	auto push = [&](RD::Renderer_RenderTarget slot)
+	if (m_bRenderTargetsRegistered || !m_combinedViews.empty())
+		throw std::logic_error("Register render targets once, before static/asset descriptors");
+
+	// Validate before modifying the table. All 2D targets must be created first.
+	for (size_t i = 0; i < RD::RENDER_TARGET_COUNT; ++i)
 	{
-		AllocatedImage& img = m_renderTargets[Index(slot)];
-		if (img.IsValid())
-		{
-			img.m_bindlessID = PushCombinedLocked(img.m_imageView, shadowSampler);
-		}
-	};
-	push(RD::Renderer_RenderTarget::DirectionalCSMAtlas);
-	push(RD::Renderer_RenderTarget::FlashlightShadowMap);
-	push(RD::Renderer_RenderTarget::VolumetricShadowMap);
-	m_shadowMapCombinedEnd = static_cast<uint32_t>(m_combinedViews.size());
+		if (IS::kRenderTargets[i].bVolume) continue;
+		const auto slot = static_cast<RD::Renderer_RenderTarget>(i);
+		const auto& image = m_renderTargets[i];
+		if (!image.IsValid() || image.m_imageView == VK_NULL_HANDLE ||
+			ResolveRenderTargetSampler(slot) == VK_NULL_HANDLE)
+			throw std::runtime_error("Render target or sampler missing before bindless registration");
+	}
+
+	m_renderTargetCombinedBegin = static_cast<uint32_t>(m_combinedViews.size());
+	m_renderTargetCombinedIDs.fill(UINT32_MAX);
+	m_combinedViews.reserve(m_combinedViews.size() + RD::RENDER_TARGET_COUNT);
+
+	for (uint32_t i = 0; i < RD::RENDER_TARGET_COUNT; ++i)
+	{
+		auto& image = m_renderTargets[i];
+		image.m_bindlessID = UINT32_MAX;
+		if (IS::kRenderTargets[i].bVolume) continue;
+
+		const auto slot = static_cast<RD::Renderer_RenderTarget>(i);
+		const VkSampler sampler = ResolveRenderTargetSampler(slot);
+		const uint32_t id = static_cast<uint32_t>(m_combinedViews.size());
+		image.m_bindlessID = id;
+		m_renderTargetCombinedIDs[i] = id;
+		m_combinedViews.push_back({
+			sampler, image.m_imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL });
+		m_combinedViewHashToID[ImageViewSamplerKey{ image.m_imageView, sampler }] = id;
+	}
+
+	m_renderTargetCombinedEnd = static_cast<uint32_t>(m_combinedViews.size());
+	m_bRenderTargetsRegistered = true;
+	MarkDirty();
+}
+
+RD::RenderTargetIDs BindlessImageTable::GetRenderTargetIDs() const
+{
+	ASSERT(m_bRenderTargetsRegistered);
+	RD::RenderTargetIDs ids{};
+	ids.worldProbeVisibilityID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::WorldProbeVisibility);
+	ids.worldProbeLightingID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::WorldProbeLighting);
+	ids.worldProbeSkyMeanID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::WorldProbeSkyMean);
+	ids.worldProbeReconstructedID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::WorldProbeReconstructed);
+	ids.transparentAccumulationID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::TransparentAccumulation);
+	ids.transparentRevealageID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::TransparentRevealage);
+	ids.transparentVelocityAccumID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::TransparentVelocityAccum);
+	ids.hdrSceneID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::HDRScene);
+	ids.tonemapID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::Tonemap);
+	ids.depthResolvedID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::DepthResolved);
+	ids.prevDepthResolvedID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::PrevDepthResolved);
+	ids.hiZID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::HiZ);
+	ids.linearizedHiZID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::LinearizedHiZ);
+	ids.visibilityID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::Visibility);
+	ids.aoRawID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::AORaw);
+	ids.aoTempID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::AOTemp);
+	ids.aoHistoryAID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::AOHistoryA);
+	ids.aoHistoryBID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::AOHistoryB);
+	ids.aoReconstructionID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::AOReconstruction);
+	ids.aoEdgeInfoID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::AoEdgeInfo);
+	ids.bentAOUpsampledID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::BentAOUpsampled);
+	ids.bentNormalAOID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::BentNormalAO);
+	ids.bentNormalAOHalfID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::BentNormalAOHalf);
+	ids.colorHistoryAID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::ColorHistoryA);
+	ids.colorHistoryBID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::ColorHistoryB);
+	ids.flareBrightID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::FlareBright);
+	ids.lensFlareColorID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::LensFlareColor);
+	ids.bloomMipchainID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::BloomMipchain);
+	ids.velocityID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::Velocity);
+	ids.viewNormalsID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::ViewNormals);
+	ids.prevViewNormalsID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::PrevViewNormals);
+	ids.shadowInvalidMaskID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::ShadowInvalidMask);
+	ids.rtShadowPenumbraID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::RTShadowPenumbra);
+	ids.rtShadowDenoisedID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::RTShadowDenoised);
+	ids.nrdShadowNormalRoughnessID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::NRDShadowNormalRoughness);
+	ids.nrdShadowViewZID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::NRDShadowViewZ);
+	ids.diffuseRadianceAID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::DiffuseRadianceA);
+	ids.diffuseRadianceBID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::DiffuseRadianceB);
+	ids.giHistoryAID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::GIHistoryA);
+	ids.giHistoryBID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::GIHistoryB);
+	ids.indirectSSGIID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::IndirectSSGI);
+	ids.giDenoisePingID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::GIDenoisePing);
+	ids.reflectRadianceID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::ReflectRadiance);
+	ids.reflectRoughnessID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::ReflectRoughness);
+	ids.atmosphereTransmittanceID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::AtmosphereTransmittance);
+	ids.atmosphereSkyViewID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::AtmosphereSkyView);
+	ids.atmosphereHDRID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::AtmosphereHDR);
+	ids.atmosphereLightingID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::AtmosphereLighting);
+	ids.nrdMotionID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::NRDMotion);
+	ids.nrdNormalRoughnessID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::NRDNormalRoughness);
+	ids.nrdViewZID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::NRDViewZ);
+	ids.rtReflectDenoisedID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::RTReflectDenoised);
+	ids.gBufferAlbedoRoughID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::GBufferAlbedoRough);
+	ids.gBufferNormalMaterialID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::GBufferNormalMaterial);
+	ids.postNonAACompositeID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::PostNonAAComposite);
+	ids.sharpenedColorID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::SharpenedColor);
+	ids.shadingSignalHalfID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::ShadingSignalHalf);
+	ids.shadingLowAID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::ShadingLowA);
+	ids.shadingLowBID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::ShadingLowB);
+	ids.ssContactShadowsID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::SSContactShadows);
+	ids.directionalCSMAtlasID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::DirectionalCSMAtlas);
+	ids.flashlightShadowMapID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::FlashlightShadowMap);
+	ids.volumetricShadowMapID = GetRenderTargetCombinedID(RD::Renderer_RenderTarget::VolumetricShadowMap);
+	return ids;
 }
 
 void BindlessImageTable::RegisterStaticTexturesAsCombined(VkSampler genericSampler)
@@ -1036,9 +1301,9 @@ void BindlessImageTable::RegisterEnvironmentSetAsCube(
 
 	std::scoped_lock lock(m_samplerCubeMutex);
 	if (env.skybox.IsValid())
-		env.skybox.m_bindlessID     = PushSamplerCubeLocked(env.skybox.m_imageView,     skyboxSampler);
+		env.skybox.m_bindlessID = PushSamplerCubeLocked(env.skybox.m_imageView, skyboxSampler);
 	if (env.specular.IsValid())
-		env.specular.m_bindlessID   = PushSamplerCubeLocked(env.specular.m_imageView,   specularSampler);
+		env.specular.m_bindlessID = PushSamplerCubeLocked(env.specular.m_imageView, specularSampler);
 	MarkDirty();
 }
 
@@ -1048,27 +1313,28 @@ void BindlessImageTable::RegisterEnvironmentSetAsCube(
 
 void BindlessImageTable::BuildInitialCombinedSamplerArray()
 {
-	// Shadow maps first — fixed indices 0 and 1
-	RegisterShadowMapsAsCombined(GetSampler(RD::Renderer_Sampler::ShadowMap));
+	// Stable compact 2D target range; integer targets are retained.
+	// Only bVolume targets (the three froxel images) are omitted.
+	RegisterRenderTargetsAsCombined();
 
-	// Static textures follow immediately after
-	// Each texture uses the sampler most appropriate for its type
+	// Static textures and all dynamic asset textures follow the fixed RT range.
 	auto pushStatic = [&](RD::Renderer_Texture slot, RD::Renderer_Sampler sampler)
-	{
-		AllocatedImage& img = m_staticTextures[Index(slot)];
-		img.m_bindlessID = PushCombinedLocked(img.m_imageView, GetSampler(sampler));
-	};
+		{
+			AllocatedImage& img = m_staticTextures[Index(slot)];
+			img.m_bindlessID = PushCombinedLocked(img.m_imageView, GetSampler(sampler));
+		};
 
 	std::scoped_lock lock(m_combinedMutex);
 
-	pushStatic(RD::Renderer_Texture::White,           RD::Renderer_Sampler::LinearClamp);
-	pushStatic(RD::Renderer_Texture::Normal,          RD::Renderer_Sampler::LinearClamp);
-	pushStatic(RD::Renderer_Texture::MetalRough,      RD::Renderer_Sampler::LinearClamp);
-	pushStatic(RD::Renderer_Texture::Checkerboard,    RD::Renderer_Sampler::LinearClamp);
-	pushStatic(RD::Renderer_Texture::RainbowLut,      RD::Renderer_Sampler::LinearClamp);
+	pushStatic(RD::Renderer_Texture::White, RD::Renderer_Sampler::LinearClamp);
+	pushStatic(RD::Renderer_Texture::Normal, RD::Renderer_Sampler::LinearClamp);
+	pushStatic(RD::Renderer_Texture::MetalRough, RD::Renderer_Sampler::LinearClamp);
+	pushStatic(RD::Renderer_Texture::Checkerboard, RD::Renderer_Sampler::LinearClamp);
+	pushStatic(RD::Renderer_Texture::RainbowLut, RD::Renderer_Sampler::LinearClamp);
 	pushStatic(RD::Renderer_Texture::HilbertCurveLut, RD::Renderer_Sampler::Noise);
-	pushStatic(RD::Renderer_Texture::CookieGobo,      RD::Renderer_Sampler::LinearClamp);
-	pushStatic(RD::Renderer_Texture::Brdf,            RD::Renderer_Sampler::Brdf);
+	pushStatic(RD::Renderer_Texture::ShadowSTBN, RD::Renderer_Sampler::Noise);
+	pushStatic(RD::Renderer_Texture::CookieGobo, RD::Renderer_Sampler::LinearClamp);
+	pushStatic(RD::Renderer_Texture::Brdf, RD::Renderer_Sampler::Brdf);
 
 	m_staticTextureCombinedEnd = static_cast<uint32_t>(m_combinedViews.size());
 
@@ -1083,8 +1349,8 @@ void BindlessImageTable::BuildInitialSamplerCubeArray()
 	{
 		if (!env.IsValid()) continue;
 
-		env.specular.m_bindlessID   = PushSamplerCubeLocked(env.specular.m_imageView,   GetSampler(RD::Renderer_Sampler::Specular));
-		env.skybox.m_bindlessID     = PushSamplerCubeLocked(env.skybox.m_imageView,     GetSampler(RD::Renderer_Sampler::Skybox));
+		env.specular.m_bindlessID = PushSamplerCubeLocked(env.specular.m_imageView, GetSampler(RD::Renderer_Sampler::Specular));
+		env.skybox.m_bindlessID = PushSamplerCubeLocked(env.skybox.m_imageView, GetSampler(RD::Renderer_Sampler::Skybox));
 	}
 
 	MarkDirty();

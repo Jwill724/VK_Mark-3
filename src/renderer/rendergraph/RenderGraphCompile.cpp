@@ -17,6 +17,7 @@ void RenderGraph::Sync(
 		(frameState.GetRTInstanceCount() == 0u);
 
 	const bool stateChanged =
+		(m_recentFrameState.WorldProbeSSGIValid() != frameState.WorldProbeSSGIValid()) ||
 		(m_recentFrameState.DebugRenderFastPath() != frameState.DebugRenderFastPath()) ||
 		(m_recentFrameState.FlashlightOn() != frameState.FlashlightOn()) ||
 		(m_recentFrameState.IsObbLineOn() != frameState.IsObbLineOn()) ||
@@ -32,6 +33,7 @@ void RenderGraph::Sync(
 		(m_recentFrameState.RTShadowsEnabled() != frameState.RTShadowsEnabled()) ||
 		(m_recentFrameState.IsScreenSpaceShadowsOn() != frameState.IsScreenSpaceShadowsOn()) ||
 		(m_recentFrameState.IsChromaticAberrationOn() != frameState.IsChromaticAberrationOn()) ||
+		(m_recentFrameState.IsWorldProbesDebugOn() != frameState.IsWorldProbesDebugOn()) ||
 		(m_recentFrameState.IsSharpeningOn() != frameState.IsSharpeningOn()) ||
 		(m_recentFrameState.InstancesActive() != frameState.InstancesActive()) ||
 		(m_recentFrameState.LightsActive() != frameState.LightsActive());
@@ -58,6 +60,11 @@ void RenderGraph::Sync(
 	m_schedule.bValid = true;
 }
 
+bool RenderGraph::IsResourceActive(const RenderResourceUsage& res) const
+{
+	return !res.condition || res.condition(m_recentFrameState);
+}
+
 // =====================================================================
 void RenderGraph::EvaluateActivePasses(const RenderPassExecutionContext& ctx)
 {
@@ -71,7 +78,7 @@ void RenderGraph::EvaluateActivePasses(const RenderPassExecutionContext& ctx)
 
 		const bool active =
 			pass.bForceExecution ||
-			!pass.shouldExecute  ||
+			!pass.shouldExecute ||
 			pass.shouldExecute(ctx);
 
 		if (active)
@@ -99,7 +106,7 @@ void RenderGraph::BuildBatches()
 	// Async only pays for itself when there is a distinct queue to run on.
 	const bool bAsyncPossible = m_bAsyncComputeEnabled && m_bHasDedicatedComputeQueue;
 
-	bool anyAsync   = false;
+	bool anyAsync = false;
 	bool anyOverlap = false;
 
 	if (bAsyncPossible)
@@ -130,16 +137,21 @@ void RenderGraph::BuildBatches()
 	g2.queue = PassQueue::Graphics;
 
 	auto push = [&](SubmitBatch& batch, size_t passIndex, PassQueue queue)
-	{
-		PassScheduleInfo info{};
-		info.passIndex = static_cast<uint32_t>(passIndex);
-		info.queue     = queue;
-		batch.passes.push_back(std::move(info));
-		batch.bActive = true;
+		{
+			PassScheduleInfo info{};
+			info.passIndex = static_cast<uint32_t>(passIndex);
+			info.queue = queue;
+			batch.passes.push_back(std::move(info));
+			batch.bActive = true;
 
-		for (const auto& res : m_passes[passIndex].resources)
-			batch.touchedTargets.set(static_cast<size_t>(res.target));
-	};
+			for (const auto& res : m_passes[passIndex].resources)
+			{
+				if (!IsResourceActive(res))
+					continue;
+
+				batch.touchedTargets.set(static_cast<size_t>(res.target));
+			}
+		};
 
 	if (!anyAsync)
 	{
@@ -195,33 +207,30 @@ void RenderGraph::BuildBatches()
 	ValidateConcurrentBatches();
 }
 
-struct ImageUse
-{
-	RD::ImageAccess access;
-	bool            bWrite;
-	const char*     passName;
-};
-
-bool FindImageUse(
-	const std::vector<RenderPassDesc>& passes,
+bool RenderGraph::FindImageUse(
 	const SubmitBatch& batch,
 	RD::Renderer_RenderTarget target,
-	ImageUse& out)
+	ImageUse& out) const
 {
 	for (const auto& info : batch.passes)
 	{
-		const RenderPassDesc& pass = passes[info.passIndex];
+		const RenderPassDesc& pass = m_passes[info.passIndex];
 
 		for (const auto& res : pass.resources)
 		{
-			if (res.target != target) continue;
+			if (!IsResourceActive(res))
+				continue;
 
-			out.access    = res.enterAccess;
-			out.bWrite    = res.bIsWrite || res.bManualExitTransition;
-			out.passName  = pass.passName.c_str();
+			if (res.target != target)
+				continue;
+
+			out.access = res.enterAccess;
+			out.bWrite = res.bIsWrite || res.bManualExitTransition;
+			out.passName = pass.passName.c_str();
 			return true;
 		}
 	}
+
 	return false;
 }
 
@@ -239,8 +248,8 @@ void RenderGraph::ValidateConcurrentBatches() const
 		ImageUse computeUse{};
 		ImageUse graphicsUse{};
 
-		if (!FindImageUse(m_passes, c0, target, computeUse))  continue;
-		if (!FindImageUse(m_passes, g1, target, graphicsUse)) continue;
+		if (!FindImageUse(c0, target, computeUse))  continue;
+		if (!FindImageUse(g1, target, graphicsUse)) continue;
 
 		const bool bEitherWrites =
 			computeUse.bWrite || graphicsUse.bWrite;
@@ -316,8 +325,30 @@ void RenderGraph::BakeBarriers()
 			// --- enter transitions ---------------------------------
 			for (const auto& res : pass.resources)
 			{
+				if (!IsResourceActive(res)) continue;
+
 				const size_t t = static_cast<size_t>(res.target);
 				const RD::ImageAccess current = m_trackedLayouts[t];
+
+				if (res.bRequireExistingState)
+				{
+					if (current != res.enterAccess)
+					{
+						fmt::println(
+							"RenderGraph required resource state mismatch: target={}, pass='{}', current={}, required={}",
+							static_cast<uint32_t>(res.target),
+							pass.passName,
+							static_cast<uint32_t>(current),
+							static_cast<uint32_t>(res.enterAccess));
+
+						ASSERT(false);
+					}
+
+					// Still considered touched by this batch for concurrency tracking,
+					// but RequireResource never performs a transition.
+					touchedThisBatch.set(t);
+					continue;
+				}
 
 				if (res.bIsWrite && !writtenThisFrame.test(t))
 				{
@@ -351,6 +382,8 @@ void RenderGraph::BakeBarriers()
 			// --- exit transitions ----------------------------------
 			for (const auto& res : pass.resources)
 			{
+				if (!IsResourceActive(res)) continue;
+
 				const size_t t = static_cast<size_t>(res.target);
 
 				if (res.bManualExitTransition)

@@ -18,7 +18,7 @@ void RegisterContactShadowsPass(RenderGraph& graph)
 		[&](RenderPassBuilder& builder)
 		{
 			builder
-				.RunOnAsyncCompute()
+				.SetPhase(RenderPhase::AsyncWindow)
 
 				.SetExecutionCondition(
 					[](const RenderPassExecutionContext& ctx)

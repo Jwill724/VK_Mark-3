@@ -28,6 +28,10 @@ void RegisterLuminanceExposurePass(RenderGraph& graph)
 					RD::Renderer_RenderTarget::HDRScene,
 					RD::ImageAccess::Read)
 
+				.ReadResource(
+					RD::Renderer_RenderTarget::DepthResolved,
+					RD::ImageAccess::DepthRead)
+
 				.HistoryResource(COLOR_RESOLVED_A, COLOR_RESOLVED_B,
 					RD::ImageAccess::Read, RD::ImageAccess::Read, true, true)
 
@@ -53,7 +57,7 @@ void RegisterLuminanceExposurePass(RenderGraph& graph)
 
 						const auto& luminanceBuf = ctx.bufferTable->GetGPUBuffer(RD::Renderer_Buffer::Luminance);
 
-						pass.scope = ComputeScope{{ graph.GetDisplayExtent() }};
+						pass.scope = ComputeScope{ { graph.GetRenderExtent() } };
 						auto& pso = std::get<ComputeScope>(pass.scope);
 
 						// ==========================
@@ -66,6 +70,14 @@ void RegisterLuminanceExposurePass(RenderGraph& graph)
 							hdrScene,
 							linearSampler);
 
+						pso.BindReadImage(
+							pass.pushWriter,
+							RD::PUSH_BINDING_READ_2,
+							ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::DepthResolved),
+							ctx.imageTable->GetSampler(RD::Renderer_Sampler::NearestClamp),
+							UINT32_MAX,
+							RD::ImageAccess::DepthRead);
+
 						pso.DispatchComputePass(
 							ctx.commandBuffer,
 							ctx.Pipe(RP::ExposureReduce),
@@ -75,7 +87,7 @@ void RegisterLuminanceExposurePass(RenderGraph& graph)
 						// ====================
 						// Luminance Finalize
 						// ====================
-						pso.UpdateExtent({ctx.profiler->lumaExposureSettings.totalLumaTiles, 1u});
+						pso.UpdateExtent({ 256u, 1u });
 						pso.UpdateWorkgroups(WORKGROUP_256);
 						pso.SetPush(ctx.profiler->lumaExposureSettings);
 

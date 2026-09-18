@@ -161,3 +161,10 @@ inline bool IsFirstGraphicsWriteThisFrame(
 	if (info == nullptr) return false;
 	return info->firstWriteTargets.test(static_cast<size_t>(target));
 }
+
+struct ImageUse
+{
+	RD::ImageAccess access;
+	bool            bWrite;
+	const char* passName;
+};

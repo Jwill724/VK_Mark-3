@@ -41,7 +41,7 @@ void RegisterMaterialResolvePass(RenderGraph& graph)
 					RD::ImageAccess::Read)
 
 				.WriteResource(
-					RD::Renderer_RenderTarget::GBufferEmissive,
+					RD::Renderer_RenderTarget::HDRScene,
 					RD::ImageAccess::Write,
 					RD::ImageAccess::Read)
 
@@ -60,7 +60,7 @@ void RegisterMaterialResolvePass(RenderGraph& graph)
 
 						const auto& albedoRough = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::GBufferAlbedoRough);
 						const auto& normalMat = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::GBufferNormalMaterial);
-						const auto& emissive = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::GBufferEmissive);
+						const auto& hdrScene = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::HDRScene);
 						const auto& visibility = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::Visibility);
 						const auto nearestClampSampler = ctx.imageTable->GetSampler(RD::Renderer_Sampler::NearestClamp);
 
@@ -83,7 +83,7 @@ void RegisterMaterialResolvePass(RenderGraph& graph)
 						pso.BindWriteImage(
 							pass.pushWriter,
 							RD::PUSH_BINDING_WRITE_3,
-							emissive);
+							hdrScene);
 
 						pso.DispatchComputePass(
 							ctx.commandBuffer,

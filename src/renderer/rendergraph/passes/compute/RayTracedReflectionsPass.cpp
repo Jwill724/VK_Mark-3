@@ -34,11 +34,15 @@ void RegisterRTReflectionsPass(RenderGraph& graph)
 							ctx.frameState->RTReflectionsEnabled();
 					})
 
+				.RequireResource(RD::Renderer_RenderTarget::AtmosphereTransmittance, RD::ImageAccess::Read)
+				.RequireResource(RD::Renderer_RenderTarget::AtmosphereSkyView, RD::ImageAccess::Read)
+				.RequireResource(RD::Renderer_RenderTarget::AtmosphereLighting, RD::ImageAccess::Read)
+
 				.ReadResource(RD::Renderer_RenderTarget::DepthResolved, RD::ImageAccess::DepthRead)
-				.ReadResource(RD::Renderer_RenderTarget::HiZ, RD::ImageAccess::ComputeRead)
-				.ReadResource(RD::Renderer_RenderTarget::GBufferAlbedoRough, RD::ImageAccess::ComputeRead)
-				.ReadResource(RD::Renderer_RenderTarget::GBufferNormalMaterial, RD::ImageAccess::ComputeRead)
-				.ReadResource(RD::Renderer_RenderTarget::Velocity, RD::ImageAccess::ComputeRead)
+				.ReadResource(RD::Renderer_RenderTarget::HiZ, RD::ImageAccess::Read)
+				.ReadResource(RD::Renderer_RenderTarget::GBufferAlbedoRough, RD::ImageAccess::Read)
+				.ReadResource(RD::Renderer_RenderTarget::GBufferNormalMaterial, RD::ImageAccess::Read)
+				.ReadResource(RD::Renderer_RenderTarget::Velocity, RD::ImageAccess::Read)
 
 				.InternalResource(RD::Renderer_RenderTarget::ReflectRoughness,
 					RD::ImageAccess::ComputeWrite, RD::ImageAccess::ComputeRead)

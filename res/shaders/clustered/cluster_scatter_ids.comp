@@ -1,4 +1,4 @@
-#version 450
+#version 460
 
 #extension GL_GOOGLE_include_directive    : require
 #extension GL_ARB_separate_shader_objects : require
@@ -17,7 +17,7 @@ void main()
 	SceneData scene = getSceneData();
 
 	float camNear = scene.cameraClips.x;
-	float camFar = scene.cameraClips.y;
+	float camFar  = scene.cameraClips.y;
 
 	uint globalIndex = gl_GlobalInvocationID.x;
 
@@ -26,18 +26,27 @@ void main()
 	{
 		uint clusterIndex = globalIndex;
 		uint clusterCount = clusteredData.clusterCount;
+
 		if (clusterIndex >= clusterCount) return;
 
 		ClusterTileSliceRanges tsrBuf = getClusterTileSliceRangesBuffer();
+
 		ClusterCounts countsBuf = getClusterCountsBuffer();
+		ClusterOffsets offsetsBuf = getClusterOffsetsBuffer();
+		ClusterLightIDs lightIDsBuf = getClusterLightIDsBuffer();
+
+		VolClusterCounts volCountsBuf = getVolClusterCountsBuffer();
+		VolClusterOffsets volOffsetsBuf = getVolClusterOffsetsBuffer();
+		VolClusterLightIDs volLightIDsBuf = getVolClusterLightIDsBuffer();
+
 		VisibleLightIDs visibleIDsBuf = getVisibleLightIDsBuffer();
 		LightBuffer lightBuf = getLightBuffer();
 
 		uint tileCountX = clusteredData.tileCountX;
 		uint tileCountY = clusteredData.tileCountY;
-		uint tileCount  = tileCountX * tileCountY;
+		uint tileCount = tileCountX * tileCountY;
 
-		uint sliceZ    = clusterIndex / tileCount;
+		uint sliceZ = clusterIndex / tileCount;
 		uint tileIndex = clusterIndex - sliceZ * tileCount;
 
 		uint tileX = tileIndex % tileCountX;
@@ -45,48 +54,90 @@ void main()
 
 		uvec2 tileSliceRange = tsrBuf.ranges[tileIndex];
 
-		if (sliceZ < tileSliceRange.x || sliceZ > tileSliceRange.y || tileSliceRange.x > tileSliceRange.y)
-		{
-			countsBuf.counts[clusterIndex] = 0u;
-			return;
-		}
-
-		ClusterLightIDs lightIDsBuf = getClusterLightIDsBuffer();
-		ClusterOffsets offsetsBuf = getClusterOffsetsBuffer();
-		ClusterCursors cursorsBuf = getClusterCursorsBuffer();
+		bool surfaceActive =
+			tileSliceRange.x <= tileSliceRange.y &&
+			sliceZ >= tileSliceRange.x &&
+			sliceZ <= tileSliceRange.y;
 
 		ClusterAABB box = computeClusterAABB(
 			tileX, tileY, sliceZ, scene.proj, uvec2(scene.renderExtentSize.xy),
 			clusteredData.tileSizeX, clusteredData.tileSizeY, clusteredData.zSlices,
 			camNear, camFar);
 
-		uint baseOffset = offsetsBuf.offsets[clusterIndex];
-		uint localCount = 0u;
+		uint surfaceCount = surfaceActive
+			? countsBuf.counts[clusterIndex]
+			: 0u;
+
+		uint volumeCount = volCountsBuf.counts[clusterIndex];
+
+		uint surfaceBaseOffset = surfaceActive
+			? offsetsBuf.offsets[clusterIndex]
+			: 0u;
+
+		uint volumeBaseOffset = volOffsetsBuf.offsets[clusterIndex];
+
+		uint surfaceLocalCount = 0u;
+		uint volumeLocalCount  = 0u;
 
 		for (uint visibleIndex = 0u; visibleIndex < visibleCount; ++visibleIndex)
 		{
 			uint globalLightID = visibleIDsBuf.ids[visibleIndex];
-			LocalLight light   = lightBuf.lights[globalLightID];
+
+			LocalLight light = lightBuf.lights[globalLightID];
 
 			if (((light.flags & LIGHT_FLAG_FLASHLIGHT_OFF) != 0u) &&
 				!((light.flags & LIGHT_FLAG_CASTS_SPOT_SHADOW) != 0u) &&
-				!((light.flags & LIGHT_FLAG_FLASHLIGHT) != 0u)) continue;
+				!((light.flags & LIGHT_FLAG_FLASHLIGHT) != 0u))
+			{
+				continue;
+			}
 
 			vec3 lightVS = (scene.view * vec4(light.position, 1.0)).xyz;
-			if (!sphereOverlapsCluster(lightVS, light.radius, box)) continue;
 
-			if (localCount >= clusteredData.maxLightsPerCluster) break;
+			if (!sphereOverlapsCluster(
+				lightVS,
+				light.radius,
+				box))
+			{
+				continue;
+			}
 
-			uint writeIndex = baseOffset + localCount;
-			lightIDsBuf.lightIDs[writeIndex] = globalLightID;
+			// Volumetric cluster list is purely spatial.
+			if (volumeLocalCount < volumeCount)
+			{
+				uint writeIndex = volumeBaseOffset + volumeLocalCount;
 
-			localCount++;
+				volLightIDsBuf.lightIDs[writeIndex] = globalLightID;
+
+				volumeLocalCount++;
+			}
+
+			// Surface cluster list is additionally restricted by
+			// the surface-derived TileSliceRange.
+			if (surfaceActive &&
+				surfaceLocalCount < surfaceCount)
+			{
+				uint writeIndex = surfaceBaseOffset + surfaceLocalCount;
+
+				lightIDsBuf.lightIDs[writeIndex] = globalLightID;
+
+				surfaceLocalCount++;
+			}
+
+			if (volumeLocalCount >= volumeCount &&
+				(!surfaceActive ||
+				 surfaceLocalCount >= surfaceCount))
+			{
+				break;
+			}
 		}
 	}
-	// Iterate over every light
+
+	// Iterate each visible light over clusters
 	else
 	{
 		uint visibleIndex = globalIndex;
+
 		if (visibleIndex >= visibleCount) return;
 
 		VisibleLightIDs visibleIDsBuf = getVisibleLightIDsBuffer();
@@ -94,47 +145,67 @@ void main()
 		uint globalLightID = visibleIDsBuf.ids[visibleIndex];
 
 		LightBuffer lightBuf = getLightBuffer();
-
 		LocalLight light = lightBuf.lights[globalLightID];
 
 		if (((light.flags & LIGHT_FLAG_FLASHLIGHT_OFF) != 0u) &&
 			!((light.flags & LIGHT_FLAG_CASTS_SPOT_SHADOW) != 0u) &&
-			!((light.flags & LIGHT_FLAG_FLASHLIGHT) != 0u)) return;
+			!((light.flags & LIGHT_FLAG_FLASHLIGHT) != 0u))
+		{
+			return;
+		}
 
-		LightClusterBounds lightBounds = computeLightClusterBounds(
-			scene.view,
-			scene.proj,
-			light.position,
-			light.radius,
-			uvec2(scene.renderExtentSize.xy),
-			clusteredData.tileSizeX,
-			clusteredData.tileSizeY,
-			clusteredData.tileCountX,
-			clusteredData.tileCountY,
-			clusteredData.zSlices,
-			camNear,
-			camFar);
+		LightClusterBounds lightBounds =
+			computeLightClusterBounds(
+				scene.view, scene.proj, light.position, light.radius, uvec2(scene.renderExtentSize.xy),
+				clusteredData.tileSizeX, clusteredData.tileSizeY, clusteredData.tileCountX, clusteredData.tileCountY,
+				clusteredData.zSlices, camNear, camFar);
 
 		ClusterTileSliceRanges tsrBuf = getClusterTileSliceRangesBuffer();
 
+		uint tileCount = clusteredData.tileCountX * clusteredData.tileCountY;
+
 		ClusterOffsets offsetsBuf = getClusterOffsetsBuffer();
-
 		ClusterCursors cursorsBuf = getClusterCursorsBuffer();
-
 		ClusterLightIDs lightIDsBuf = getClusterLightIDsBuffer();
 
-		uint tileCount = clusteredData.tileCountX * clusteredData.tileCountY;
+		VolClusterOffsets volOffsetsBuf = getVolClusterOffsetsBuffer();
+		VolClusterCursors volCursorsBuf = getVolClusterCursorsBuffer();
+		VolClusterLightIDs volLightIDsBuf = getVolClusterLightIDsBuffer();
 
 		for (uint tileY = lightBounds.tileMin.y; tileY <= lightBounds.tileMax.y; ++tileY)
 		{
 			for (uint tileX = lightBounds.tileMin.x; tileX <= lightBounds.tileMax.x; ++tileX)
 			{
-
 				uint tileIndex = tileY * clusteredData.tileCountX + tileX;
 
+				// ---------------------------------------------------------
+				// Volumetric IDs
+				//
+				// Pure spatial light bounds.
+				// No TileSliceRanges.
+				// ---------------------------------------------------------
+				for (uint sliceZ = lightBounds.sliceMin; sliceZ <= lightBounds.sliceMax; ++sliceZ)
+				{
+					uint clusterIndex = sliceZ * tileCount + tileIndex;
+
+					uint cursor = atomicAdd(volCursorsBuf.cursors[clusterIndex], 1u);
+
+					if (cursor >= clusteredData.maxLightsPerCluster) continue;
+
+					uint writeIndex = volOffsetsBuf.offsets[clusterIndex] + cursor;
+					volLightIDsBuf.lightIDs[writeIndex] = globalLightID;
+				}
+
+				// ---------------------------------------------------------
+				// Surface IDs
+				//
+				// Restrict raw light bounds against the surface-derived
+				// tile slice range.
+				// ---------------------------------------------------------
 				uvec2 tileSliceRange = tsrBuf.ranges[tileIndex];
 
 				uint sliceMin = max(lightBounds.sliceMin, tileSliceRange.x);
+
 				uint sliceMax = min(lightBounds.sliceMax, tileSliceRange.y);
 
 				if (sliceMin > sliceMax) continue;

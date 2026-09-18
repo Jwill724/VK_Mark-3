@@ -1,4 +1,4 @@
-#version 450
+#version 460
 
 #extension GL_ARB_separate_shader_objects : require
 #extension GL_GOOGLE_include_directive : require
@@ -15,6 +15,10 @@ layout(set = PUSH_SET, binding = PUSH_BINDING_READ_2) uniform sampler2D inFlareB
 layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1) writeonly uniform image2D outLensFlareColor;
 
 layout(push_constant) uniform LensFlarePush {
+	vec2 froxelClips;
+	uint fogEnabled;
+	float pad0;
+
 	vec2 outputRes;
 	vec2 invOutputRes;
 
@@ -22,10 +26,9 @@ layout(push_constant) uniform LensFlarePush {
 	float sunVisible;
 	uint rainbowLUTIndex;
 
-	float brightThreshold;
-	float brightKnee;
 	float brightIntensity;
 	float starburstIntensity;
+	float pad1[2];
 
 	float ringInnerRadius;
 	float ringOuterRadius;
@@ -65,7 +68,7 @@ const float kSunAuthoredBlend = 0.45;
 
 const vec3  kWorldUp = vec3(0.0, 1.0, 0.0);
 
-const float kBrightnessGateScale = 0.55;
+const float kBrightnessGateScale = 2.0;
 const float kCoverageMin    = 0.020;
 const float kCoverageMax    = 0.120;
 const float kOcclusionFloor = 0.03;
@@ -157,22 +160,14 @@ void main()
 					scene.cameraClips.y,
 					vec2(scene.displayPixelSizes.xy));
 
-				float exposure = max(getLuminanceBuffer().luminanceSums[0].x, 1e-4);
-				float brightnessGate = 1.0 - exp(-sun.lum * exposure * kBrightnessGateScale);
+				float brightnessGate = 1.0 - exp(-sun.lum * kBrightnessGateScale);
 
-				float coverageGate = saturate(
-					(sun.coverage - kCoverageMin) / max(kCoverageMax - kCoverageMin, 1e-6));
-				coverageGate = pow(coverageGate, 1.75);
+				float occlusionSoft = pow(saturate(occ), 1.25);
 
-				float occlusionSoft = pow(mix(kOcclusionFloor, 1.0, occ), 1.25);
-
-				gGate = brightnessGate * coverageGate * occlusionSoft * saturate(pc.sunVisible);
+				gGate = brightnessGate * occlusionSoft * saturate(pc.sunVisible);
 				gSunUv = sun.uv;
 
-				vec3 measured = normalizeTint(sun.color);
-				vec3 authored = normalizeTint(scene.sunlightColor.rgb);
-				vec3 tint = normalizeTint(mix(measured, authored, kSunAuthoredBlend));
-
+				vec3 tint = normalizeTint(sun.color);
 				gTint = mix(vec3(1.0), tint, kSunTintStrength);
 			}
 		}

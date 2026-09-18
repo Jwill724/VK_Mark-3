@@ -8,6 +8,8 @@
 #undef vkCmdBeginDebugUtilsLabelEXT
 #undef vkCmdEndDebugUtilsLabelEXT
 #undef vkCmdInsertDebugUtilsLabelEXT
+#undef vkQueueBeginDebugUtilsLabelEXT
+#undef vkQueueEndDebugUtilsLabelEXT
 #undef vkCreateAccelerationStructureKHR
 #undef vkDestroyAccelerationStructureKHR
 #undef vkGetAccelerationStructureBuildSizesKHR
@@ -31,6 +33,9 @@ PFN_vkSetDebugUtilsObjectNameEXT  pfn_vkSetDebugUtilsObjectNameEXT = nullptr;
 PFN_vkCmdBeginDebugUtilsLabelEXT  pfn_vkCmdBeginDebugUtilsLabelEXT = nullptr;
 PFN_vkCmdEndDebugUtilsLabelEXT    pfn_vkCmdEndDebugUtilsLabelEXT = nullptr;
 PFN_vkCmdInsertDebugUtilsLabelEXT pfn_vkCmdInsertDebugUtilsLabelEXT = nullptr;
+
+PFN_vkQueueBeginDebugUtilsLabelEXT pfn_vkQueueBeginDebugUtilsLabelEXT = nullptr;
+PFN_vkQueueEndDebugUtilsLabelEXT   pfn_vkQueueEndDebugUtilsLabelEXT = nullptr;
 
 PFN_vkCmdSetCheckpointNV        pfn_vkCmdSetCheckpointNV = nullptr;
 PFN_vkGetQueueCheckpointData2NV pfn_vkGetQueueCheckpointData2NV = nullptr;
@@ -75,6 +80,8 @@ void LoadInstanceExtensionFunctions(VkInstance instance)
 	LOAD_INSTANCE(vkCmdBeginDebugUtilsLabelEXT);
 	LOAD_INSTANCE(vkCmdEndDebugUtilsLabelEXT);
 	LOAD_INSTANCE(vkCmdInsertDebugUtilsLabelEXT);
+	LOAD_INSTANCE(vkQueueBeginDebugUtilsLabelEXT);
+	LOAD_INSTANCE(vkQueueEndDebugUtilsLabelEXT);
 }
 
 void LoadDeviceExtensionFunctions(VkDevice device)
@@ -102,3 +109,4 @@ bool DidExtensionLoadFail() { return s_extensionLoadFailed; }
 
 #undef LOAD
 #undef LOAD_INSTANCE
+#undef LOAD_DEVICE_OPT

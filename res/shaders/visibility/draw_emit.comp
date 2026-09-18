@@ -1,4 +1,4 @@
-#version 450
+#version 460
 
 #extension GL_GOOGLE_include_directive : require
 #extension GL_ARB_separate_shader_objects : require
@@ -52,7 +52,6 @@ void addDrawStats(uint mask, uint triangleCount)
 //		case VIS_SLOT_CSM0:
 //		case VIS_SLOT_CSM1:
 //		case VIS_SLOT_CSM2:
-//		case VIS_SLOT_CSM3:
 //			atomicAdd(getGPUStatsBuffer().gpuStats.shadowDrawCount, 1u);
 //			return;
 	}

@@ -3,6 +3,8 @@
 #include "ResourceTypes.h"
 #include "renderer/frame/FrameResources.h"
 
+#include "LightUnits.h"
+
 #include "renderer/RendererDefinitions.h"
 namespace RD = RendererDefinitions;
 
@@ -103,10 +105,10 @@ namespace LightingSystem
 		float shadowBias = 0.0001f;
 		float radiusTexels = 1.0f;
 
-		float intensity = 30.0f;
-		float radius = 20.0f;
+		float radius = 5.0f;
 		float outerDeg = 38.0f;
 		float innerDeg = 22.0f;
+		float lumens = LightUnits::LM_FLASHLIGHT;
 
 		float sourceRadius = 0.04f;
 	} _flashlightSettings{};
@@ -151,6 +153,8 @@ namespace LightingSystem
 	void SetTargetActiveLightCount(uint32_t targetCount);
 	bool UpdateLightList();
 	bool UpdateDynamicLightsOrbit(float deltaTime);
+
+	void ResolveLightUnits(float adaptedEV100);
 
 	extern Flashlight _mainFlashLight;
 

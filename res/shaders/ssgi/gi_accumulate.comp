@@ -1,10 +1,10 @@
-#version 450
+#version 460
 
 #extension GL_GOOGLE_include_directive : require
-#extension GL_ARB_separate_shader_objects : require
 
 #include "../include/common.glsl"
 #include "../include/depth.glsl"
+#include "../include/ssgi_push.glsl"
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
@@ -17,130 +17,84 @@ layout(set = PUSH_SET, binding = PUSH_BINDING_READ_6) uniform sampler2D inViewNo
 layout(set = PUSH_SET, binding = PUSH_BINDING_READ_7) uniform sampler2D inPrevViewNormals;
 layout(set = PUSH_SET, binding = PUSH_BINDING_READ_8) uniform sampler2D inAORaw;
 
-layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1) writeonly uniform image2D outGIHistory;
+layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1, rgba16f) writeonly uniform image2D outGIHistory;
 layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_2) writeonly uniform image2D outAO;
 
-layout(push_constant) uniform PushConstantData {
-	float effectRadius;
-	float effectFalloffRange;
-	vec2  ndcToViewMul_x_PixelSize;
+void main()
+{
+	SceneData s = getSceneData();
 
-	float radiusMultiplier;
-	float sampleDistributionPower;
-	uint  noiseIndex;
-	uint  hilbertLutID;
+	ivec2 full = ivec2(s.renderExtentSize.xy);
+	ivec2 halfExt = (full + 1) / 2;
 
-	float denoiseBlurBeta;
-	uint  isFinalPass;
+	ivec2 hp = ivec2(gl_GlobalInvocationID.xy);
 
-	float upsampleDepthSigma;
-	float giClampMax;
-	float giReprojTolerance;
+	if (any(greaterThanEqual(hp, halfExt))) return;
 
-	float giTemporalAlpha;
-	float giFallbackStrength;
-} pc;
+	ivec2 fp = min(hp * 2 + aoQuadPhase(s.temporal.x, IsTAAEnabled()), full - 1);
+	vec2 uv = (vec2(fp) + 0.5) / vec2(full);
 
-const float NORMAL_REJECT_COS = 0.9;
+	vec4 cur = texelFetch(inGIRaw, hp, 0);
+	vec4 hist = vec4(0);
 
-void main() {
-	SceneData scene    = getSceneData();
-	DebugToggles debug = getDebugToggles();
+	bool valid = s.temporal.y == 1u && cur.a > 0.0;
 
-	const ivec2 fullExtent = ivec2(scene.renderExtentSize.xy);
-	const ivec2 fullMax    = fullExtent - 1;
-	const ivec2 halfExtent = (fullExtent + 1) / 2;
-	const ivec2 halfPix    = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(halfPix, halfExtent))) return;
+	vec2 prevUV = uv - texelFetch(inVelocity, fp, 0).rg;
 
-	const ivec2 phase = aoQuadPhase(scene.temporal.x, IsTAAEnabled());
-	const ivec2 pix   = min(halfPix * 2 + phase, fullMax);
-
-	vec3  current   = texelFetch(inGIRaw, halfPix, 0).rgb;
-	float currentAO = texelFetch(inAORaw, halfPix, 0).r;
-
-	vec3  nbMin = current;
-	vec3  nbMax = current;
-	float aoMin = currentAO;
-	float aoMax = currentAO;
-	for (int y = -1; y <= 1; ++y)
-	for (int x = -1; x <= 1; ++x)
-	{
-		if (x == 0 && y == 0) continue;
-		ivec2 p = clamp(halfPix + ivec2(x, y), ivec2(0), halfExtent - 1);
-		vec3  s = texelFetch(inGIRaw, p, 0).rgb;
-		float a = texelFetch(inAORaw, p, 0).r;
-		nbMin = min(nbMin, s);
-		nbMax = max(nbMax, s);
-		aoMin = min(aoMin, a);
-		aoMax = max(aoMax, a);
-	}
-
-	bool valid = (scene.temporal.y == 1u);
-
-	vec4 hist = vec4(0.0);
+	valid = valid &&
+		all(greaterThanEqual(prevUV, vec2(0))) &&
+		all(lessThan(prevUV, vec2(1)));
 
 	if (valid)
 	{
-		const vec2 fullPixelSize = vec2(scene.renderPixelSizes.xy);
-		const vec2 halfPixelSize = vec2(scene.renderPixelSizes.zw);
-		const vec2 uv            = (vec2(pix) + 0.5) * fullPixelSize;
-		const vec2 halfUV        = (vec2(halfPix) + 0.5) * halfPixelSize;
+		float z = texelFetch(inHiZ, fp, 0).r;
 
-		vec2 velocity   = texelFetch(inVelocity, pix, 0).rg;
-		vec2 prevUV     = uv - velocity;
-		vec2 prevHalfUV = halfUV - velocity;
+		vec3 v = cheapReconstructViewPos(uv, z, s.ndcToViewMult, s.ndcToViewAdd);
+		vec3 w = (s.invView * vec4(v, 1)).xyz;
 
-		if (any(lessThan(prevUV, vec2(0.0))) || any(greaterThanEqual(prevUV, vec2(1.0))))
+		float expected = -(s.prevView * vec4(w, 1)).z;
+		float raw = textureLod(inPrevDepth, prevUV, 0).r;
+		float previous = screenToViewDepth(raw, s.depthLinearizeMult, s.depthLinearizeAdd);
+
+		vec3 n = normalize(mat3(s.invView) * octDecode(texelFetch(inViewNormals, fp, 0).rg * 2.0 - 1.0));
+		vec3 pn = normalize(mat3(s.prevInvView) * octDecode(textureLod(inPrevViewNormals, prevUV, 0).rg * 2.0 - 1.0));
+
+		valid = raw > 0.0 &&
+			expected > 0.0 &&
+			abs(previous - expected) < expected * pc.giReprojTolerance &&
+			dot(n, pn) > 0.9;
+
+		if (valid)
 		{
-			valid = false;
+			hist = textureLod(inGIHistory, prevUV, 0);
+			hist.rgb *= getPreExposureDelta();
+			valid = hist.a > 0.0;
 		}
-		else
+	}
+
+	vec3 low = cur.rgb;
+	vec3 high = cur.rgb;
+
+	for (int y = -1; y <= 1; ++y)
+	{
+		for (int x = -1; x <= 1; ++x)
 		{
-			float centerZ = texelFetch(inHiZ, pix, 0).r;
-			vec3  vPos    = cheapReconstructViewPos(uv, centerZ, scene.ndcToViewMult, scene.ndcToViewAdd);
-			vec3  posWS   = (scene.invView * vec4(vPos, 1.0)).xyz;
+			vec4 q = texelFetch(inGIRaw, clamp(hp + ivec2(x, y), ivec2(0), halfExt - 1), 0);
 
-			float expectedZ = -(scene.prevView * vec4(posWS, 1.0)).z;
-
-			float prevRaw = textureLod(inPrevDepth, prevUV, 0.0).r;
-			float prevZ   = screenToViewDepth(prevRaw, scene.depthLinearizeMult, scene.depthLinearizeAdd);
-
-			vec3 nCur  = octDecode(texelFetch(inViewNormals, pix, 0).rg * 2.0 - 1.0);
-			vec3 nPrev = octDecode(textureLod(inPrevViewNormals, prevUV, 0.0).rg * 2.0 - 1.0);
-
-			vec3 nCurWS  = normalize(mat3(scene.invView) * nCur);
-			vec3 nPrevWS = normalize(mat3(scene.prevInvView) * nPrev);
-			bool normalOk = dot(nCurWS, nPrevWS) > NORMAL_REJECT_COS;
-
-			bool depthOk  = (prevRaw > 0.0)
-						 && abs(prevZ - expectedZ) < expectedZ * pc.giReprojTolerance;
-
-			if (depthOk && normalOk)
+			if (q.a > 0.0)
 			{
-				hist = textureLod(inGIHistory, prevUV, 0.0);
-				hist.rgb = clamp(hist.rgb, nbMin, nbMax);
-			}
-			else
-			{
-				valid = false;
+				low = min(low, q.rgb);
+				high = max(high, q.rgb);
 			}
 		}
 	}
 
-	// Frame count in .a drives a variable rate: alpha=1 on the first sample,
-	// annealing to giTemporalAlpha as evidence builds. Fast disocclusion
-	// recovery without a fixed slow EMA dragging through fresh regions.
-	float histN  = valid ? floor(hist.a)  : 0.0;
-	float histAO = valid ? fract(hist.a)  : currentAO;
-	histAO = clamp(histAO, aoMin, aoMax);
+	hist.rgb = clamp(hist.rgb, low, high);
 
-	float n      = min(histN + 1.0, 1.0 / max(pc.giTemporalAlpha, 1e-4));
-	float rate   = 1.0 / n;
+	float rate = valid ? clamp(pc.giTemporalAlpha, 0.01, 1.0) : 1.0;
+	vec3 rgb = mix(hist.rgb, cur.rgb, rate);
 
-	vec3  outRad = mix(hist.rgb, current, rate);
-	float outAOv = mix(histAO, currentAO, rate);
-
-	imageStore(outGIHistory, halfPix, vec4(outRad, floor(n) + clamp(outAOv, 0.0, 0.999)));
-	imageStore(outAO, halfPix, vec4(outAOv));
+	// Confidence tracks CURRENT evidence; reprojection never invents observations.
+	imageStore(outGIHistory, hp, vec4(rgb, clamp(cur.a, 0.0, 1.0)));
+	imageStore(outAO, hp, vec4(texelFetch(inAORaw, hp, 0).r));
 }

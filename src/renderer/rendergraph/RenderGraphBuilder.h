@@ -83,6 +83,22 @@ public:
 		bool bIsWrite,
 		bool bManualExitTransition = false);
 
+	// Declares that the resource must already be in expectedAccess.
+	// Emits no transition. Used for persistent/global resources whose producer
+	// establishes their final read state before this pass executes.
+	RenderPassBuilder& RequireResource(
+		RD::Renderer_RenderTarget target,
+		RD::ImageAccess expectedAccess,
+		uint32_t baseMip = 0,
+		uint32_t mipCount = 1);
+
+	RenderPassBuilder& RequireResourceIf(
+		RD::Renderer_RenderTarget target,
+		RD::ImageAccess requiredAccess,
+		std::function<bool(const RD::RenderStateInfo&)> condition,
+		uint32_t baseMip = 0,
+		uint32_t mipCount = 1);
+
 	// Marks the pass async-capable. Sets the phase itself, so async passes never need SetPhase.
 	RenderPassBuilder& RunOnAsyncCompute()
 	{

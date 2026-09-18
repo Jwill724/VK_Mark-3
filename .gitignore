@@ -39,6 +39,9 @@ res/assets/package-lock.json
 
 !res/assets/envhdr/
 !res/assets/city/
+!res/assets/noise/
+!res/assets/flashlight_cookie/
+!res/assets/smaa_tex/
 !res/assets/*.glb
 !res/assets/**/*.glb
 
@@ -47,6 +50,7 @@ res/assets/Bistro.glb
 # Shaders
 *.spv
 *.spv.dis
+res/shaders/cache/
 
 # CMake
 CMakeFiles/
@@ -64,3 +68,11 @@ vk_layer_settings.txt
 !src/
 !res/
 !vendor/
+
+# Libraries
+lib/
+vendor/Vulkan/lib/
+
+# Keep prebuilt GLFW library
+!vendor/GLFW/lib/
+!vendor/GLFW/lib/**

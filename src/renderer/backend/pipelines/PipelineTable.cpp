@@ -159,12 +159,6 @@ void PipelineTable::Build()
 		.Blend(Add(), InvSrc(Mask::R), Add(Mask::RG))
 		.DepthRead(Fmt::D32, Cmp::Greater);
 
-	Graphics(RP::Skybox)
-		.Vert("environment/skyboxVS.spv")
-		.Frag("environment/skyboxFS.spv")
-		.Color(Fmt::RGBA16F)
-		.DepthRead(Fmt::D32, Cmp::GEqual);
-
 	Graphics(RP::LineDebug)
 		.Vert("debug/line_debugVS.spv")
 		.Frag("debug/line_debugFS.spv")
@@ -192,13 +186,13 @@ void PipelineTable::Build()
 
 	Compute(RP::ShadowBounds, "shadows/shadow_bounds.spv");
 	Compute(RP::ScreenSpaceContactShadows, "shadows/bend_sss.spv");
-	Compute(RP::RTShadowVolumeBuild, "shadows/rtshadow_volume_build.spv");
-	Compute(RP::RTShadowInvalidMask, "shadows/rtshadow_invalid_mask.spv");
-	Compute(RP::RTShadowClassify, "shadows/rtshadow_classify.spv");
-	Compute(RP::RTShadowTrace, "shadows/rtshadow_trace.spv");
+	Compute(RP::RTShadowVolumeBuild, "shadows/rt_shadow_volume_build.spv");
+	Compute(RP::RTShadowInvalidMask, "shadows/rt_shadow_invalid_mask.spv");
+	Compute(RP::RTShadowClassify, "shadows/rt_shadow_classify.spv");
+	Compute(RP::RTShadowTrace, "shadows/rt_shadow_trace.spv");
 
 	Compute(RP::ReflectClassify, "reflections/reflect_classify.spv");
-	Compute(RP::RTReflectTrace, "reflections/rtreflect_trace.spv");
+	Compute(RP::RTReflectTrace, "reflections/rt_reflect_trace.spv");
 
 	Compute(RP::HiZPrefilter, "ssgi/hi_z_prefilter.spv");
 	Compute(RP::VBGI, "ssgi/vbgi_main.spv");
@@ -206,6 +200,7 @@ void PipelineTable::Build()
 	Compute(RP::BilateralUpsample, "ssgi/bilateral_upsample.spv");
 	Compute(RP::AODenoise, "ssgi/ao_denoise.spv");
 	Compute(RP::GIDenoise, "ssgi/gi_denoise.spv");
+	Compute(RP::AOAccumulate, "ssgi/ao_temporal.spv");
 
 	Compute(RP::LightCull, "clustered/light_culling.spv");
 	Compute(RP::TransparentClusterBounds, "clustered/transparent_cluster_bounds.spv");
@@ -215,9 +210,6 @@ void PipelineTable::Build()
 	Compute(RP::ClusterScanOffsets, "clustered/cluster_scan_offsets.spv");
 	Compute(RP::ClusterScatterIDs, "clustered/cluster_scatter_ids.spv");
 
-	Compute(RP::VolumetricLight, "post_process/vol_light_raymarch.spv");
-	Compute(RP::VolumetricLightBlur, "post_process/vol_light_blur.spv");
-	Compute(RP::VolumetricLightResolve, "post_process/vol_light_resolve.spv");
 	Compute(RP::FlareBright, "post_process/flare_bright.spv");
 	Compute(RP::FlareGen, "post_process/flare_gen.spv");
 	Compute(RP::BloomDownsample, "post_process/bloom_downsample.spv");
@@ -230,15 +222,36 @@ void PipelineTable::Build()
 	Compute(RP::ExposureFinalize, "post_process/exposure_finalize.spv");
 	Compute(RP::FinalComposite, "post_process/final_composite.spv");
 
-	Compute(RP::HDRToCubemap, "environment/hdr2cubemap.spv");
-	Compute(RP::SpecularPrefilter, "environment/specular_prefilter.spv");
-	Compute(RP::SHIrradiance, "environment/sh_irradiance.spv");
+	Compute(RP::FroxelInject, "volumetric_fog/froxel_inject.spv");
+	Compute(RP::FroxelReproject, "volumetric_fog/froxel_reproject.spv");
+	Compute(RP::FroxelIntegrate, "volumetric_fog/froxel_integrate.spv");
+
+	//Compute(RP::HDRToCubemap, "environment/hdr2cubemap.spv");
+	//Compute(RP::SpecularPrefilter, "environment/specular_prefilter.spv");
+	//Compute(RP::SHIrradiance, "environment/sh_irradiance.spv");
 	Compute(RP::BRDFLUT, "environment/brdf_lut.spv");
+
+	Compute(RP::WorldProbesRelocate, "world_probes/wp_relocate.spv");
+	Compute(RP::WorldProbesRelight, "world_probes/wp_relight.spv");
+	Compute(RP::WorldProbesPrepare, "world_probes/wp_prepare.spv");
+	Compute(RP::WorldProbesSkyTrace, "world_probes/wp_sky_trace.spv");
+	Compute(RP::WorldProbesInject, "world_probes/wp_inject.spv");
+	Compute(RP::WorldProbesResolve, "world_probes/wp_resolve.spv");
+	Compute(RP::WorldProbesReconstruct, "world_probes/wp_reconstruct.spv");
+	Compute(RP::WorldProbesCacheResolve, "world_probes/wp_cache_resolve.spv");
+	Compute(RP::WorldProbesCacheFallback, "world_probes/wp_cache_fallback.spv");
+	Compute(RP::WorldProbesSkyMean, "world_probes/wp_sky_mean.spv");
+	Compute(RP::WorldProbesDebug, "world_probes/wp_debug.spv");
 
 	Compute(RP::DebugCount, "debug/debug_count.spv");
 	Compute(RP::DebugArgs, "debug/debug_args.spv");
 	Compute(RP::DebugBuild, "debug/debug_build.spv");
 	Compute(RP::GBufferDebug, "debug/gbuffer_view.spv");
+
+	Compute(RP::AtmosphereTransmittance, "sky/atmosphere_transmittance.spv");
+	Compute(RP::AtmosphereLighting, "sky/atmosphere_lighting.spv");
+	Compute(RP::AtmosphereSky, "sky/sky_render.spv");
+	Compute(RP::AtmosphereSkyView, "sky/sky_view.spv");
 
 	for (size_t i = 0; i < RD::PIPELINE_COUNT; ++i)
 	{

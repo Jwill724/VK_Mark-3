@@ -3,6 +3,7 @@
 #include "scene.h"
 #include "../../profiler/Profiler.h"
 #include "EngineTypes.h"
+#include "LightUnits.h"
 
 constexpr float kMaxHiZTranslation = 1.5f;
 constexpr float kMaxHiZRotationDeg = 15.0f;
@@ -40,9 +41,9 @@ void Scene::InitScene(glm::vec3 spawn)
 
 	m_camera.SetSensitivity(50.0f); // Feels good on 1600dpi
 	m_camera.SetMaxSpeed(16.0f);
-	m_camera.SetMinSpeed(4.0f);
+	m_camera.SetMinSpeed(3.0f);
 
-	m_camera.SetAcceleration(20.0f);
+	m_camera.SetAcceleration(10.0f);
 	m_camera.SetDamping(8.0f);
 
 	m_sceneInfo.cameraClips = glm::vec4(m_camera.GetNearClip(), m_camera.GetFarClip(), 0.0f, 0.0f);
@@ -50,8 +51,9 @@ void Scene::InitScene(glm::vec3 spawn)
 	m_currentJitterNDC = glm::vec2(0.0f);
 	m_previousJitterNDC = glm::vec2(0.0f);
 
-	m_sceneInfo.sunlightColor = glm::vec4(1.0f, 0.55f, 0.2f, 50.0f);    // golden sun
-	//m_sceneInfo.sunlightColor = glm::vec4(1.0f, 0.96f, 0.87f, 50.0f); // white
+	glm::vec3 tint(1.0f, 0.55f, 0.2f);
+	tint /= (0.2126f * tint.r + 0.7152f * tint.g + 0.0722f * tint.b);
+	m_sceneInfo.sunlightColor = glm::vec4(tint, LightUnits::SUN_LOW_GOLDEN);
 	m_sceneInfo.sunlightDirection = glm::vec4(0.36f, 0.46f, -0.09f, 0.0f);
 
 	m_shadowControl.shadowFar = m_shadowFar;
@@ -246,7 +248,7 @@ bool Scene::UpdateCamera(
 	return isTemporalInvalid;
 }
 
-void Scene::BuildMotionMatrices(bool bMotionNeeded, bool bTemporalValid)
+void Scene::BuildMotionMatrices(bool bTemporalValid)
 {
 	const size_t count = m_dynamicTransforms.size();
 
@@ -257,14 +259,10 @@ void Scene::BuildMotionMatrices(bool bMotionNeeded, bool bTemporalValid)
 		return;
 	}
 
-	// Skip the inverses entirely when nothing consumes them.
-	if (bMotionNeeded)
-	{
-		if (m_motionMatrices.size() != count) m_motionMatrices.resize(count);
+	if (m_motionMatrices.size() != count) m_motionMatrices.resize(count);
 
-		for (size_t i = 0; i < count; ++i)
-			m_motionMatrices[i] = m_prevDynamicTransforms[i] * glm::inverse(m_dynamicTransforms[i]);
-	}
+	for (size_t i = 0; i < count; ++i)
+		m_motionMatrices[i] = m_prevDynamicTransforms[i] * glm::inverse(m_dynamicTransforms[i]);
 
 	m_prevDynamicTransforms = m_dynamicTransforms;
 }
@@ -381,7 +379,6 @@ void Scene::InitCSMInfo(uint32_t atlasWidth, uint32_t atlasHeight, uint32_t bind
 	m_pcssTexel = 1.0f / static_cast<float>(atlasWidth);
 	m_pcfTexel = 1.0f / m_csmAtlasTileRes;
 
-	m_shadowControl.splitLambda = 0.97f;
 	m_csmInfo.params.x = static_cast<float>(bindlessID);
 	m_csmInfo.params.y = static_cast<float>(RD::MAX_SHADOW_CASCADES);
 	m_csmInfo.params.w = m_shadowControl.lsEpsilon;
@@ -431,12 +428,18 @@ void Scene::UpdateShadowTexel(RD::SunShadowFilter filterMode)
 // CULL MODE: FRONT BIT
 void Scene::UpdateCSMInfo()
 {
-	// Cascades not dependent FOV, these values worked best with trial and error tests with 4 cascades
+	//constexpr float CASCADE_RADIUS_RATIO[RD::MAX_SHADOW_CASCADES] = {
+	//	0.017f,
+	//	0.046f,
+	//	0.160f,
+	//	0.500f
+	//};
+
+	// Cascades not dependent FOV
 	constexpr float CASCADE_RADIUS_RATIO[RD::MAX_SHADOW_CASCADES] = {
-		0.017f,
-		0.046f,
-		0.160f,
-		0.500f // sss carries last cascade
+		0.024f,
+		0.100f,
+		0.500f
 	};
 
 	UpdatePCSSParams();
@@ -532,7 +535,7 @@ void Scene::InitVolumetricShadowInfo(
 	uint32_t shadowHeight,
 	uint32_t bindlessID)
 {
-	assert(shadowWidth == shadowHeight);
+	ASSERT(shadowWidth == shadowHeight);
 
 	m_volumetricShadowTileRes = static_cast<float>(shadowWidth);
 
@@ -545,38 +548,10 @@ void Scene::InitVolumetricShadowInfo(
 
 void Scene::UpdateVolumetricShadowInfo(float maxDistance)
 {
-	constexpr float SHADOW_SUN_MARGIN = glm::radians(50.0f);
-
 	const glm::vec3 lightDir = GetLightDir();
-
-	const glm::vec3 cameraForward =
-		-glm::normalize(glm::vec3(m_sceneInfo.invView[2]));
 
 	const float tanHalfFovX = m_sceneInfo.tanHalfFov.x;
 	const float tanHalfFovY = m_sceneInfo.tanHalfFov.y;
-
-	const float viewLightAngle =
-		std::acos(
-			glm::clamp(
-				glm::dot(cameraForward, lightDir),
-				-1.0f,
-				1.0f));
-
-	const float halfFovDiagonal =
-		std::atan(
-			std::sqrt(
-				tanHalfFovX * tanHalfFovX +
-				tanHalfFovY * tanHalfFovY));
-
-	const float visibleSunAngle = viewLightAngle - halfFovDiagonal;
-
-	if (visibleSunAngle >= glm::half_pi<float>() - SHADOW_SUN_MARGIN)
-	{
-		m_volumetricShadowInfo.params.y = 0.0f;
-		return;
-	}
-
-	m_volumetricShadowInfo.params.y = 1.0f;
 
 	const float nearClip = m_camera.GetNearClip();
 	const float farClip = m_camera.GetFarClip();
@@ -636,7 +611,7 @@ void Scene::UpdateVolumetricShadowInfo(float maxDistance)
 
 	worldUnitsPerTexel = (radius * 2.0f) / m_volumetricShadowTileRes;
 
-	m_volumetricShadowInfo.cascadeWorldTexel = worldUnitsPerTexel;
+	m_volumetricShadowInfo.params.y = worldUnitsPerTexel;
 
 	const glm::vec3 lightPos = frustumCenter + lightDir;
 
@@ -659,13 +634,16 @@ void Scene::UpdateVolumetricShadowInfo(float maxDistance)
 		receiverLSMax = glm::max(receiverLSMax, cornerLS);
 	}
 
-	m_volumetricShadowInfo.receiverLSMin = glm::vec4(receiverLSMin, 0.0f);
-	m_volumetricShadowInfo.receiverLSMax = glm::vec4(receiverLSMax, 0.0f);
-
 	const float casterExtension = radius;
 
 	const float minZ = receiverLSMin.z;
 	const float maxZ = receiverLSMax.z + casterExtension;
+
+	m_volumetricShadowInfo.receiverLSMin =
+		glm::vec4(receiverLSMin, 0.0f);
+
+	m_volumetricShadowInfo.receiverLSMax =
+		glm::vec4(receiverLSMax, maxZ);
 
 	const glm::mat4 lightProj =
 		glm::orthoRH_ZO(

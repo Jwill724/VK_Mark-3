@@ -1,0 +1,210 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "../include/world_probe.glsl"
+#include "../include/depth.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1) uniform writeonly image2D outColor;
+
+layout(push_constant, scalar) uniform WPDebugPush
+{
+	vec4 params;
+	uvec4 mode;
+} pc;
+
+const vec3 WP_CASCADE_COLORS[5] = vec3[5](
+	vec3(0.1, 0.6, 1),
+	vec3(1, 0.6, 0.1),
+	vec3(0.2, 1, 0.45),
+	vec3(0.8, 0.3, 1),
+	vec3(1, 0.25, 0.3));
+
+float wpDebugSphere(vec3 ro, vec3 rd, vec3 center, float radius)
+{
+	vec3 oc = ro - center;
+	float b = dot(oc, rd);
+	float d = b * b - dot(oc, oc) + radius * radius;
+	if (d < 0.0) return -1.0;
+	float t = -b - sqrt(d);
+	return t > 0.0 ? t : -b + sqrt(d);
+}
+
+vec3 wpDebugShade(uint id, vec3 n, vec3 rd)
+{
+	WorldProbeBuffer b = getWorldProbeBuffer();
+	WPHeader h = b.header;
+	uint cascade = id / WP_PER_CASCADE;
+	WPCascadeDesc c = h.cascades[cascade];
+	int flags = b.probes[id].cell.w;
+	bool traced = b.probes[id].meta.x == pc.mode.z;
+	bool relit = b.probes[id].meta.y == pc.mode.z;
+
+	if (pc.mode.x == 5u)
+		return WP_CASCADE_COLORS[cascade];
+
+	if (pc.mode.x == 6u)
+	{
+		if (traced)
+			return (flags & WP_FLAG_QUARTER_TRACE) != 0 ?
+				vec3(0, 1, 1) : vec3(1, 0.6, 0.1);
+		if (relit)
+			return vec3(0.2, 1, 0.3);
+		return vec3(0.08);
+	}
+
+	if (pc.mode.x == 4u)
+	{
+		vec3 color = vec3(0.9);
+		vec3 offset = abs(b.probes[id].position.xyz -
+			vec3(b.probes[id].cell.xyz) * c.originSpacing.w) / c.originSpacing.w;
+		float t = clamp(
+			max(offset.x, max(offset.y, offset.z)) / (0.5 - h.relocation1.x),
+			0.0, 1.0);
+
+		if ((flags & WP_FLAG_RELOCATED) != 0)
+			color = vec3(1, 0.55, 0) * (0.4 + 0.6 * t);
+		if (b.probes[id].state.x == 0u)
+			color = vec3(1, 0.05, 0.05);
+		if (b.probes[id].meta.w == 0u || (flags & WP_FLAG_NEEDS_FULL_TRACE) != 0)
+			color = vec3(0.1, 0.3, 1);
+		if ((flags & WP_FLAG_INSIDE) != 0)
+			color = vec3(1, 0, 1);
+		if (b.probes[id].state.x != 0u && (flags & WP_FLAG_QUARTER_TRACE) != 0)
+			color = mix(color, vec3(0, 1, 1), 0.5);
+		if (b.probes[id].state.x != 0u && (traced || relit))
+			color = mix(color, vec3(0.1, 1, 0.2), 0.4);
+		return color * (0.35 + 0.65 * max(dot(n, -rd), 0.0));
+	}
+
+	if (b.probes[id].state.x == 0u)
+		return vec3(0.03);
+	if (pc.mode.x == 3u)
+		return vec3(wpVisibilityMoments(id, n).x);
+
+	vec3 sky = vec3(0);
+	vec3 bounce = vec3(0);
+	float vis = 0.0;
+	float confidence = 0.0;
+	for (uint a = 0u; a < 6u; ++a)
+	{
+		float sw = pow(max(dot(n, WP_AXES[a]), 0.0), 2.0);
+		vec4 s = b.probes[id].sky[a];
+		sky += s.rgb * sw;
+		vis += s.a * sw;
+		vec4 bb = b.probes[id].bounce[a];
+		float w = wpNormalWeight(n, a) * clamp(bb.a, 0.0, 1.0);
+		bounce += bb.rgb * w;
+		confidence += w;
+	}
+
+	if (pc.mode.x == 1u)
+		return vec3(vis);
+	if (pc.mode.x == 2u)
+		return mix(vec3(0.03), vec3(1, 0.8, 0.2), clamp(confidence, 0.0, 1.0));
+	return (sky + (confidence > 1e-6 ? bounce / confidence : vec3(0))) * getPreExposure();
+}
+
+void main()
+{
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 extent = imageSize(outColor);
+	if (any(greaterThanEqual(pixel, extent))) return;
+
+	WorldProbeBuffer b = getWorldProbeBuffer();
+	WPHeader h = b.header;
+	if (h.layoutInfo.y == 0u) return;
+
+	SceneData scene = getSceneData();
+	vec2 uv = (vec2(pixel) + 0.5) / vec2(extent);
+	vec3 ro = scene.cameraPos.xyz;
+	vec3 rd = normalize(
+		reconstructWorldPosFromDepth(uv, 0.5, scene.invProj, scene.invView).pos - ro);
+
+	float bestT = pc.params.y;
+	float raw = SampleTextureFetch(scene.renderTargetIDs.depthResolvedID, pixel, 0).r;
+	if (raw > 0.0)
+	{
+		bestT = min(bestT, length(
+			reconstructWorldPosFromDepth(uv, raw, scene.invProj, scene.invView).pos - ro));
+	}
+
+	uint bestId = 0xffffffffu;
+	vec3 bestCenter = vec3(0);
+
+	// Tiny signed components are used only for traversal; exact rd tests spheres.
+	vec3 dir = vec3(
+		rd.x >= 0.0 ? max(rd.x, 1e-8) : min(rd.x, -1e-8),
+		rd.y >= 0.0 ? max(rd.y, 1e-8) : min(rd.y, -1e-8),
+		rd.z >= 0.0 ? max(rd.z, 1e-8) : min(rd.z, -1e-8));
+
+	for (uint cascade = 0u; cascade < min(h.layoutInfo.x, 5u); ++cascade)
+	{
+		if (pc.mode.w != 0u && cascade != pc.mode.w - 1u)
+			continue;
+
+		WPCascadeDesc c = h.cascades[cascade];
+		float spacing = c.originSpacing.w;
+		float radius = clamp(pc.params.x, 0.001, 0.49) * spacing;
+		ivec3 dims = ivec3(c.dimsCount.xyz);
+		vec3 invDir = 1.0 / dir;
+		vec3 go = (ro - c.originSpacing.xyz) / spacing;
+		vec3 t0 = (vec3(-1) - go) * spacing * invDir;
+		vec3 t1 = (vec3(dims) - go) * spacing * invDir;
+		vec3 tMin = min(t0, t1);
+		vec3 tMax = max(t0, t1);
+		float enter = max(max(max(tMin.x, tMin.y), tMin.z), 0.0);
+		float leave = min(min(min(tMax.x, tMax.y), tMax.z), bestT);
+		if (enter >= leave) continue;
+
+		ivec3 cell = clamp(ivec3(floor(go + dir * (enter / spacing))),
+			ivec3(-1), dims - 1);
+		ivec3 stepDir = ivec3(sign(dir));
+		vec3 tDelta = abs(spacing * invDir);
+		vec3 next = (vec3(cell + max(stepDir, ivec3(0))) - go) * spacing * invDir;
+		float tCell = enter;
+
+		for (uint i = 0u;
+			i < uint(dims.x + dims.y + dims.z) + 6u && tCell < min(bestT, leave);
+			++i)
+		{
+			for (uint k = 0u; k < 8u; ++k)
+			{
+				ivec3 local = cell + ivec3(k & 1u, (k >> 1u) & 1u, (k >> 2u) & 1u);
+				if (any(lessThan(local, ivec3(0))) || any(greaterThanEqual(local, dims)))
+					continue;
+
+				ivec3 worldCell = c.baseCell.xyz + local;
+				uint id = wpPhysicalIndex(worldCell, c);
+				if (b.probes[id].state.y != h.revisions.y ||
+					any(notEqual(b.probes[id].cell.xyz, worldCell)))
+					continue;
+				if (pc.mode.y == 0u && b.probes[id].state.x == 0u)
+					continue;
+
+				vec3 center = b.probes[id].position.xyz;
+				float t = wpDebugSphere(ro, rd, center, radius);
+				if (t > 0.0 && t < bestT)
+				{
+					bestT = t;
+					bestId = id;
+					bestCenter = center;
+				}
+			}
+
+			int axis = next.x < next.y ?
+				(next.x < next.z ? 0 : 2) : (next.y < next.z ? 1 : 2);
+			tCell = next[axis];
+			cell[axis] += stepDir[axis];
+			next[axis] += tDelta[axis];
+			if (cell[axis] < -1 || cell[axis] >= dims[axis])
+				break;
+		}
+	}
+
+	if (bestId == 0xffffffffu) return;
+	vec3 n = normalize(ro + rd * bestT - bestCenter);
+	vec3 color = wpDebugShade(bestId, n, rd) * pc.params.z;
+	imageStore(outColor, pixel, vec4(sanitizeHDR(color, RESOLVE_TARGET_MAX), 1));
+}

@@ -1,6 +1,12 @@
 #ifndef LIGHTING_GLSL
 #define LIGHTING_GLSL
 
+#include "common.glsl"
+#include "pbr.glsl"
+#include "depth.glsl"
+#include "atmosphere_lighting.glsl"
+#include "world_probe.glsl"
+
 struct Surface
 {
 	vec3  worldPos;
@@ -279,71 +285,120 @@ vec3 EvaluateTransmission(
 	return behind * transmittance * s.diffuseAlbedo * s.kD;
 }
 
-vec3 sampleIrradiance(vec3 N, vec3 shCoeffs[9])
-{
-	N.y = -N.y;
-
-	const float c1 = 0.429043, c2 = 0.511664, c3 = 0.743125, c4 = 0.886227, c5 = 0.247708;
-
-	vec3 L00  = shCoeffs[0];
-	vec3 L1m1 = shCoeffs[1];
-	vec3 L10  = shCoeffs[2];
-	vec3 L11  = shCoeffs[3];
-	vec3 L2m2 = shCoeffs[4];
-	vec3 L2m1 = shCoeffs[5];
-	vec3 L20  = shCoeffs[6];
-	vec3 L21  = shCoeffs[7];
-	vec3 L22  = shCoeffs[8];
-
-	return max(vec3(0.0),
-		  c1 * L22 * (N.x * N.x - N.y * N.y)
-		+ c3 * L20 * (N.z * N.z)
-		+ c4 * L00
-		- c5 * L20
-		+ 2.0 * c1 * (L2m2 * N.x * N.y + L21 * N.x * N.z + L2m1 * N.y * N.z)
-		+ 2.0 * c2 * (L11 * N.x + L1m1 * N.y + L10 * N.z));
-}
-
-vec3 sampleSpecIBL(vec3 V, vec3 N, float roughness, vec3 F0, vec2 brdf, uint specIdx)
+vec3 sampleAtmosphereSpecular(vec3 V, vec3 N, float roughness, vec3 F0, vec2 brdf)
 {
 	vec3 R = reflect(-V, N);
-	R.y = -R.y;
-
-	int levels = SampleCubeQueryLevels(specIdx);
-	float lod = clamp(roughness * float(levels - 1), 0.0, float(levels - 1));
-	vec3 prefiltered = SampleCubeLod(specIdx, R, lod).rgb;
-
-	return prefiltered * (F0 * brdf.x + brdf.y);
+	return atmospherePrefilteredRadiance(R, roughness) * (F0 * brdf.x + brdf.y);
 }
 
-void evaluateAmbient(out vec3 ambientDiffuse, out vec3 ambientSpecular,
-	Surface s, vec3 irradiance, vec3 giRadiance,
-	float shWeight, float specOcclusion, float giSpecBlend,
-	uint specularID, vec4 rtSpec)
+vec3 MultiBounceAO(float ao, vec3 albedo)
 {
-	vec3 skyDiffuse = (1.0 / PI) * irradiance * shWeight;
-
-	ambientDiffuse = s.kD * s.diffuseAlbedo * (skyDiffuse + giRadiance);
-
-	vec3 dfg = s.F0 * s.brdf.x + s.brdf.y;
-
-	vec3 iblSpec  = sampleSpecIBL(s.V, s.N, s.rough, s.F0, s.brdf, specularID) * s.multiScatter;
-	vec3 ssgiSpec = (giRadiance + skyDiffuse) * dfg * s.multiScatter;
-
-	vec3 screenSpec = mix(iblSpec, ssgiSpec, giSpecBlend) * specOcclusion;
-	vec3 tracedSpec = rtSpec.rgb * dfg * s.multiScatter;
-
-	ambientSpecular = mix(screenSpec, tracedSpec, rtSpec.a);
+	vec3 a =  2.0404 * albedo - 0.3324;
+	vec3 b = -4.7951 * albedo + 0.6417;
+	vec3 c =  2.7552 * albedo + 0.6903;
+	return max(vec3(ao), ((ao * a + b) * ao + c) * ao);
 }
 
-// Transparent / forward path.
-void evaluateAmbient(out vec3 ambientDiffuse, out vec3 ambientSpecular,
-	Surface s, vec3 irradiance, vec3 giRadiance,
-	float shWeight, float specOcclusion, uint specularID)
+float probeCoverage(WPLighting wp)
 {
-	evaluateAmbient(ambientDiffuse, ambientSpecular, s,
-					irradiance, giRadiance, shWeight, specOcclusion,
-					0.0, specularID, vec4(0.0));
+	return wp.valid ? clamp(wp.coverage, 0.0, 1.0) : 0.0;
+}
+
+vec3 probeSkyIrradiance(WPLighting wp, vec3 N)
+{
+	float coverage = probeCoverage(wp);
+
+	if (coverage <= 0.0)
+		return atmosphereDiffuseIrradiance(N);
+
+	vec3 cached = max(wp.sky, vec3(0.0)) * PI;
+
+	// Avoid the atmosphere lookup when probes fully cover the sample.
+	if (coverage >= 1.0)
+		return cached;
+
+	return mix(
+		atmosphereDiffuseIrradiance(N),
+		cached,
+		coverage);
+}
+
+// Returns E/pi, ready for multiplication by diffuse reflectance.
+vec3 probeBounceLighting(WPLighting wp)
+{
+	return max(wp.bounce, vec3(0.0)) * probeCoverage(wp);
+}
+
+float probeDiffuseSkyVisibility(WPLighting wp)
+{
+	return mix(
+		1.0,
+		clamp(wp.skyVisibility, 0.0, 1.0),
+		probeCoverage(wp));
+}
+
+float probeSpecularSkyVisibility(
+	WPLighting wp,
+	vec3 R,
+	vec3 geometricN)
+{
+	float horizon = clamp(1.0 + dot(R, geometricN), 0.0, 1.0);
+
+	return probeDiffuseSkyVisibility(wp) * horizon * horizon;
+}
+
+void evaluateAmbient(
+	out vec3 ambientDiffuse,
+	out vec3 ambientSpecular,
+	Surface s,
+	vec3 irradiance,
+	vec3 giRadiance,
+	vec3 diffuseOcclusion,
+	float specOcclusion,
+	float giSpecBlend,
+	float skyVisibility,
+	vec4 rtSpec)
+{
+	vec3 skyDiffuse =
+		irradiance * (1.0 / PI) * diffuseOcclusion;
+
+	ambientDiffuse =
+		s.kD * s.diffuseAlbedo * (skyDiffuse + giRadiance);
+
+	vec3 materialFactor =
+		(s.F0 * s.brdf.x + s.brdf.y) * s.multiScatter;
+
+	float rtWeight = clamp(rtSpec.a, 0.0, 1.0);
+
+	vec3 tracedSpec =
+		max(rtSpec.rgb, vec3(0.0)) * materialFactor;
+
+	// Avoid atmosphere filtering when RT fully supplies the reflection.
+	if (rtWeight >= 1.0)
+	{
+		ambientSpecular = tracedSpec;
+		return;
+	}
+
+	float visibility =
+		clamp(skyVisibility, 0.0, 1.0) *
+		clamp(specOcclusion, 0.0, 1.0);
+
+	vec3 fallbackSpec = vec3(0.0);
+
+	if (visibility > 0.0)
+	{
+		vec3 R = reflect(-s.V, s.N);
+
+		fallbackSpec =
+			atmospherePrefilteredRadiance(R, s.rough) *
+			materialFactor *
+			visibility;
+	}
+
+	// giSpecBlend is retained for source compatibility.
+	// Diffuse GI is no longer substituted for specular incident radiance.
+	ambientSpecular = mix(fallbackSpec, tracedSpec, rtWeight);
 }
 
 // =============================================
@@ -351,8 +406,9 @@ void evaluateAmbient(out vec3 ambientDiffuse, out vec3 ambientSpecular,
 
 float radiusAttenuation(float distanceToLight, float radius)
 {
-	float x = distanceToLight / max(radius, 1e-6);
-	float t = clamp(1.0 - x * x, 0.0, 1.0);
+	float x  = distanceToLight / max(radius, 1e-6);
+	float x2 = x * x;
+	float t  = saturate(1.0 - x2 * x2);
 	return t * t;
 }
 
@@ -372,30 +428,6 @@ float spotConeFactor(vec3 lightDirWS, vec3 L_ws, float innerCos, float outerCos)
 	float denom = max(innerCos - outerCos, 1e-6);
 	float t = clamp((cosAngle - outerCos) / denom, 0.0, 1.0);
 	return t;
-}
-
-float lightFadeFactor(float distanceToLight, float fadeStart, float fadeEnd) {
-	return 1.0 - smoothstep(fadeStart, fadeEnd, distanceToLight);
-}
-
-float lightCameraFade(LocalLight light, vec3 cameraPosWS)
-{
-	float cameraToLight = length(light.position - cameraPosWS);
-
-	float fadeStartMul = 20.0;
-	float fadeEndMul = 100.0;
-
-	// Standard radius
-	if (light.radius < 1.0) {
-		// Small radius will fade out at futher distance
-		fadeStartMul = 50.0;
-		fadeEndMul = 150.0;
-	}
-
-	float fadeStart = max(light.radius * fadeStartMul, 0.0);
-	float fadeEnd = max(light.radius * fadeEndMul, fadeStart + 1e-3);
-
-	return lightFadeFactor(cameraToLight, fadeStart, fadeEnd);
 }
 
 vec3 ClosestPointOnSegment(vec3 p, vec3 a, vec3 b)
@@ -491,9 +523,10 @@ LightSample evaluateAreaLight(
 LightSample evaluateLocalLight(LocalLight light, Surface s, vec3 cameraPosWS)
 {
 	LightSample r;
-	r.diffuse  = vec3(0.0);
-	r.specular = vec3(0.0);
-	r.NdotL    = 0.0;
+	r.diffuse    = vec3(0.0);
+	r.specular   = vec3(0.0);
+	r.NdotL      = 0.0;
+	r.transNdotL = 0.0;
 
 	vec3  toLight = light.position - s.worldPos;
 	float dist    = length(toLight);
@@ -503,8 +536,7 @@ LightSample evaluateLocalLight(LocalLight light, Surface s, vec3 cameraPosWS)
 	float attenDist = max(dist, light.sourceRadius);
 
 	float atten = radiusAttenuation(dist, light.radius)
-				* inverseSquareAttenuation(attenDist)
-				* lightCameraFade(light, cameraPosWS);
+				* inverseSquareAttenuation(attenDist);
 
 	if ((light.flags & LIGHT_FLAG_SPOT) != 0u)
 		atten *= spotConeFactor(light.direction, L, light.innerCos, light.outerCos);
@@ -512,6 +544,8 @@ LightSample evaluateLocalLight(LocalLight light, Surface s, vec3 cameraPosWS)
 	if (atten <= 0.0) return r;
 
 	vec3 radiance = light.color * light.intensity * atten;
+
+	if (luminance(radiance) < LIGHT_CULL_NITS) return r;
 
 	if (light.sourceRadius > 0.0 || light.sourceLength > 0.0)
 		return evaluateAreaLight(s, light.position, light.direction,

@@ -16,10 +16,12 @@ namespace RendererDefinitions
 	// ALL ssbos come from this table
 	inline constexpr uint32_t ADDRESS_TABLE_BINDING           = 0u;
 
+	inline constexpr uint32_t GLOBAL_ATMOSPHERE_BINDING       = 1u;
+
 	// Global bindings
-	inline constexpr uint32_t GLOBAL_BINDING_DEBUG_INLINE     = 1u;
-	inline constexpr uint32_t GLOBAL_BINDING_SAMPLER_CUBE     = 2u;
-	inline constexpr uint32_t GLOBAL_BINDING_COMBINED_SAMPLER = 3u;
+	inline constexpr uint32_t GLOBAL_BINDING_DEBUG_INLINE     = 2u;
+	inline constexpr uint32_t GLOBAL_BINDING_SAMPLER_CUBE     = 3u;
+	inline constexpr uint32_t GLOBAL_BINDING_COMBINED_SAMPLER = 4u;
 
 	// Frame bindings
 	inline constexpr uint32_t FRAME_BINDING_SCENE      = 1u;
@@ -39,12 +41,11 @@ namespace RendererDefinitions
 	inline constexpr uint32_t PUSH_BINDING_READ_8  = 7u;
 	inline constexpr uint32_t PUSH_BINDING_READ_9  = 8u;
 	inline constexpr uint32_t PUSH_BINDING_READ_10 = 9u;
-	inline constexpr uint32_t PUSH_BINDING_READ_11 = 10u;
-	inline constexpr uint32_t PUSH_BINDING_WRITE_1 = 11u;
-	inline constexpr uint32_t PUSH_BINDING_WRITE_2 = 12u;
-	inline constexpr uint32_t PUSH_BINDING_WRITE_3 = 13u;
-	inline constexpr uint32_t PUSH_BINDING_WRITE_4 = 14u;
-	inline constexpr uint32_t PUSH_BINDING_WRITE_5 = 15u;
+	inline constexpr uint32_t PUSH_BINDING_WRITE_1 = 10u;
+	inline constexpr uint32_t PUSH_BINDING_WRITE_2 = 11u;
+	inline constexpr uint32_t PUSH_BINDING_WRITE_3 = 12u;
+	inline constexpr uint32_t PUSH_BINDING_WRITE_4 = 13u;
+	inline constexpr uint32_t PUSH_BINDING_WRITE_5 = 14u;
 
 	// -------------------------
 	// Indirect Dispatch Slots
@@ -60,20 +61,19 @@ namespace RendererDefinitions
 	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_STREAM_CSM0          = 4u;
 	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_STREAM_CSM1          = 5u;
 	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_STREAM_CSM2          = 6u;
-	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_STREAM_CSM3          = 7u;
-	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_STREAM_VOLUMETRIC    = 8u;
-	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_SCATTER              = 9u;  // total-visible dispatch
+	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_STREAM_VOLUMETRIC    = 7u;
+	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_SCATTER              = 8u;  // total-visible dispatch
 
 	// Other systems
-	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_DEBUG_BUILD          = 10u;
-	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_LIGHTS               = 11u;
-	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_CLUSTERS             = 12u;
+	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_DEBUG_BUILD          = 9u;
+	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_LIGHTS               = 10u;
+	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_CLUSTERS             = 11u;
 
-	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_REFLECT_RAYS         = 13u;
-	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_SHADOW_RAYS          = 14u;
-	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_TRANSPARENCY_RAYS    = 15u;
+	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_REFLECT_RAYS         = 12u;
+	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_SHADOW_RAYS          = 13u;
+	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_TRANSPARENCY_RAYS    = 14u;
 
-	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_COUNT                = 16u;
+	inline constexpr uint32_t INDIRECT_DISPATCH_SLOT_COUNT                = 15u;
 
 	// Byte offsets — multiply slot by stride
 	inline constexpr uint64_t DISPATCH_STREAM_OPAQUE_BYTES            = INDIRECT_DISPATCH_SLOT_STREAM_OPAQUE        * DISPATCH_SLOT_STRIDE_BYTES;
@@ -83,7 +83,6 @@ namespace RendererDefinitions
 	inline constexpr uint64_t DISPATCH_STREAM_CSM0_OFFSET_BYTES       = INDIRECT_DISPATCH_SLOT_STREAM_CSM0          * DISPATCH_SLOT_STRIDE_BYTES;
 	inline constexpr uint64_t DISPATCH_STREAM_CSM1_OFFSET_BYTES       = INDIRECT_DISPATCH_SLOT_STREAM_CSM1          * DISPATCH_SLOT_STRIDE_BYTES;
 	inline constexpr uint64_t DISPATCH_STREAM_CSM2_OFFSET_BYTES       = INDIRECT_DISPATCH_SLOT_STREAM_CSM2          * DISPATCH_SLOT_STRIDE_BYTES;
-	inline constexpr uint64_t DISPATCH_STREAM_CSM3_OFFSET_BYTES       = INDIRECT_DISPATCH_SLOT_STREAM_CSM3          * DISPATCH_SLOT_STRIDE_BYTES;
 	inline constexpr uint64_t DISPATCH_STREAM_VOLUMETRIC_OFFSET_BYTES = INDIRECT_DISPATCH_SLOT_STREAM_VOLUMETRIC    * DISPATCH_SLOT_STRIDE_BYTES;
 	inline constexpr uint64_t DISPATCH_SCATTER_OFFSET_BYTES           = INDIRECT_DISPATCH_SLOT_SCATTER              * DISPATCH_SLOT_STRIDE_BYTES;
 	inline constexpr uint64_t DISPATCH_DEBUG_BUILD_OFFSET_BYTES       = INDIRECT_DISPATCH_SLOT_DEBUG_BUILD          * DISPATCH_SLOT_STRIDE_BYTES;
@@ -113,9 +112,8 @@ namespace RendererDefinitions
 	inline constexpr uint32_t VIS_SLOT_CSM0          = 4u;
 	inline constexpr uint32_t VIS_SLOT_CSM1          = 5u;
 	inline constexpr uint32_t VIS_SLOT_CSM2          = 6u;
-	inline constexpr uint32_t VIS_SLOT_CSM3          = 7u;
-	inline constexpr uint32_t VIS_SLOT_VOLUMETRIC    = 8u;
-	inline constexpr uint32_t VIS_SLOT_COUNT         = 9u;
+	inline constexpr uint32_t VIS_SLOT_VOLUMETRIC    = 7u;
+	inline constexpr uint32_t VIS_SLOT_COUNT         = 8u;
 
 	// Used to build draws
 	inline constexpr uint32_t VIS_PRIMARY_OPAQUE         = 1u << 0;
@@ -125,8 +123,7 @@ namespace RendererDefinitions
 	inline constexpr uint32_t VIS_CSM0                   = 1u << 4;
 	inline constexpr uint32_t VIS_CSM1                   = 1u << 5;
 	inline constexpr uint32_t VIS_CSM2                   = 1u << 6;
-	inline constexpr uint32_t VIS_CSM3                   = 1u << 7;
-	inline constexpr uint32_t VIS_VOLUMETRIC             = 1u << 8;
+	inline constexpr uint32_t VIS_VOLUMETRIC             = 1u << 7;
 
 	// -------------------------
 	// Draw Region Offsets
@@ -140,7 +137,6 @@ namespace RendererDefinitions
 	inline constexpr uint32_t MAX_DRAWS_CSM0          = 8192u;
 	inline constexpr uint32_t MAX_DRAWS_CSM1          = 2048u;
 	inline constexpr uint32_t MAX_DRAWS_CSM2          = 2048u;
-	inline constexpr uint32_t MAX_DRAWS_CSM3          = 2048u;
 	inline constexpr uint32_t MAX_DRAWS_VOLUMETRIC    = 8192u;
 
 	// --------------------
@@ -155,7 +151,6 @@ namespace RendererDefinitions
 	inline constexpr uint32_t MAX_TASK_DISPATCHES_CSM0          = MAX_DRAWS_CSM0;
 	inline constexpr uint32_t MAX_TASK_DISPATCHES_CSM1          = MAX_DRAWS_CSM1;
 	inline constexpr uint32_t MAX_TASK_DISPATCHES_CSM2          = MAX_DRAWS_CSM2;
-	inline constexpr uint32_t MAX_TASK_DISPATCHES_CSM3          = MAX_DRAWS_CSM3;
 	inline constexpr uint32_t MAX_TASK_DISPATCHES_VOLUMETRIC    = MAX_DRAWS_VOLUMETRIC;
 
 	inline constexpr uint32_t TASK_OFFSET_OPAQUE        = 0u;
@@ -165,8 +160,7 @@ namespace RendererDefinitions
 	inline constexpr uint32_t TASK_OFFSET_CSM0          = TASK_OFFSET_FLASHLIGHT    + MAX_TASK_DISPATCHES_FLASHLIGHT;
 	inline constexpr uint32_t TASK_OFFSET_CSM1          = TASK_OFFSET_CSM0          + MAX_TASK_DISPATCHES_CSM0;
 	inline constexpr uint32_t TASK_OFFSET_CSM2          = TASK_OFFSET_CSM1          + MAX_TASK_DISPATCHES_CSM1;
-	inline constexpr uint32_t TASK_OFFSET_CSM3          = TASK_OFFSET_CSM2          + MAX_TASK_DISPATCHES_CSM2;
-	inline constexpr uint32_t TASK_OFFSET_VOLUMETRIC    = TASK_OFFSET_CSM3          + MAX_TASK_DISPATCHES_CSM3;
+	inline constexpr uint32_t TASK_OFFSET_VOLUMETRIC    = TASK_OFFSET_CSM2          + MAX_TASK_DISPATCHES_CSM2;
 	inline constexpr uint32_t TASK_OFFSET_TOTAL         = TASK_OFFSET_VOLUMETRIC    + MAX_TASK_DISPATCHES_VOLUMETRIC;
 
 	inline constexpr uint32_t TASK_BYTE_OFFSET_BY_SLOT[VIS_SLOT_COUNT] = {
@@ -177,7 +171,6 @@ namespace RendererDefinitions
 		TASK_OFFSET_CSM0          * TASK_GROUP_SIZE,
 		TASK_OFFSET_CSM1          * TASK_GROUP_SIZE,
 		TASK_OFFSET_CSM2          * TASK_GROUP_SIZE,
-		TASK_OFFSET_CSM3          * TASK_GROUP_SIZE,
 		TASK_OFFSET_VOLUMETRIC    * TASK_GROUP_SIZE
 	};
 
@@ -189,7 +182,6 @@ namespace RendererDefinitions
 		MAX_TASK_DISPATCHES_CSM0,
 		MAX_TASK_DISPATCHES_CSM1,
 		MAX_TASK_DISPATCHES_CSM2,
-		MAX_TASK_DISPATCHES_CSM3,
 		MAX_TASK_DISPATCHES_VOLUMETRIC,
 	};
 
@@ -249,6 +241,25 @@ namespace RendererDefinitions
 	inline constexpr uint32_t FROXEL_GRID_Y = 90u;
 	inline constexpr uint32_t FROXEL_GRID_Z = 64u;
 
+	inline constexpr uint32_t ATMOSPHERE_TRANSMITTANCE_X = 512u;
+	inline constexpr uint32_t ATMOSPHERE_TRANSMITTANCE_Y = 512u;
+
+	inline constexpr uint32_t ATMOSPHERE_SKY_VIEW_X = 256u;
+	inline constexpr uint32_t ATMOSPHERE_SKY_VIEW_Y = 128u;
+
+	// Fixed allocation. Changing origin or spacing never changes the probe count.
+	inline constexpr uint32_t WORLD_PROBE_CASCADE_COUNT = 5u;
+	inline constexpr uint32_t WORLD_PROBE_GRID_X = 16u;
+	inline constexpr uint32_t WORLD_PROBE_GRID_Y = 8u;
+	inline constexpr uint32_t WORLD_PROBE_GRID_Z = 16u;
+	inline constexpr uint32_t WORLD_PROBES_PER_CASCADE = 2048u;
+	inline constexpr uint32_t WORLD_PROBE_COUNT = 10240u;
+	inline constexpr uint32_t WORLD_PROBE_RAYS_FULL = 64u;
+	inline constexpr uint32_t WORLD_PROBE_RAYS_QUARTER = 16u;
+	inline constexpr uint32_t WORLD_PROBE_VISIBILITY_SIZE = 8u;
+	inline constexpr uint32_t WORLD_PROBE_VISIBILITY_TILE_SIZE = 10u;
+	inline constexpr uint32_t WORLD_PROBE_RESOLVE_DIVISOR = 2u;
+
 	// For target hardware 16x is practically free
 	inline constexpr float MAX_ANISOTROPY_LEVEL = 16.0f;
 
@@ -268,7 +279,7 @@ namespace RendererDefinitions
 
 	// Resource Limits
 	inline constexpr uint32_t MAX_MIP_LEVELS          = 12u;
-	inline constexpr uint32_t MAX_SHADOW_CASCADES     = 4u;
+	inline constexpr uint32_t MAX_SHADOW_CASCADES     = 3u;
 	inline constexpr uint32_t VOL_CASCADE_COUNT       = 1u;
 	inline constexpr uint32_t MAX_LUMINANCE_GROUPS    = 65536u;
 	inline constexpr uint32_t HI_Z_MIP_COUNT          = 11u;
@@ -276,12 +287,14 @@ namespace RendererDefinitions
 
 	inline constexpr uint32_t RADIANCE_MIP_COUNT      = 4u;
 
-	inline constexpr uint32_t MAX_ENVIRONMENT_SETS            = 8u;  // 128 uniform alignment
+	inline constexpr uint32_t MAX_ENVIRONMENT_SETS            = 2u;
 	inline constexpr uint32_t SPECULAR_PREFILTERED_MIP_LEVELS = 6;
 	inline constexpr uint32_t PREFILTER_SAMPLE_COUNT          = 2048;
-	inline constexpr uint32_t SKYBOX_EXTENT                   = 512;
-	inline constexpr uint32_t SPECULAR_EXTENT                 = 256;
 	inline constexpr uint32_t BRDF_EXTENT                     = 128;
+
+	// Unused currently.
+	inline constexpr uint32_t SKYBOX_EXTENT = 512;
+	inline constexpr uint32_t SPECULAR_EXTENT = 256;
 
 	inline constexpr uint32_t MAX_SHADOW_INVALID_VOLUMES = 64u;
 	inline constexpr size_t SHADOW_INVALID_VOLUME_HEADER_BYTES = 16u;
@@ -301,6 +314,13 @@ namespace RendererDefinitions
 	inline constexpr uint32_t FLASHLIGHT_SHADOW_MAP_X = FLASHLIGHT_SHADOW_QUALITY;
 	inline constexpr uint32_t FLASHLIGHT_SHADOW_MAP_Y = FLASHLIGHT_SHADOW_QUALITY;
 
+	// The volumetric shadow map pass doesn't scale with resolution,
+	// vertex throughput and alpha tested fragment shader are true cost.
+	// 2048 provides highest quality god ray beams and d16 format minimizes some memory cost.
+	// Single projection, so every texel is the same world size across the whole
+	// fog volume. Alpha tested foliage is what drives this: each froxel records a
+	// coverage fraction, and sub-texel gaps between leaves don't blur, they vanish.
+	// Dropping resolution biases froxels toward shadowed and beams read as flat fog.
 	inline constexpr uint32_t VOL_SHADOW_MAP_X = 2048u;
 	inline constexpr uint32_t VOL_SHADOW_MAP_Y = 2048u;
 
@@ -338,25 +358,31 @@ namespace RendererDefinitions
 		HiZGenerationLate,
 		VelocityResolve,
 		MaterialResolve,
+		ClusteredLights,
+		AtmosphereLUTUpdate,
+		AtmosphereSkyView,
+		AtmosphereLighting,
 		DirectionalCSMAtlas,
 		FlashlightShadow,
-		ClusteredLights,
 		VolumetricShadowMap,
-		VolumetricLight,
-		//VolumetricFog,
+		AtmosphereSky,
+		ScreenSpaceContactShadows,
+		SSGI,
+		WorldProbesUpdate,
+		WorldProbesResolve,
+		WorldProbesCache,
+		WorldProbesReconstruct,
 		TlasBuild,
 		RTShadows,
 		RTReflections,
 		NRDDenoise,
-		SSGI,
-		ScreenSpaceContactShadows,
-		Skybox,
-		OpaqueForward,
 		OpaqueLighting,
 		TransparentForward,
+		VolumetricFog,
+		HDRSceneComposite,
+		WorldProbesDebug,
 		DebugDrawBuild,
 		DebugLineDraw,
-		HDRSceneComposite,
 		TAA,
 		LuminanceExposure,
 		Bloom,
@@ -379,7 +405,6 @@ namespace RendererDefinitions
 	enum class Renderer_Pipeline
 	{
 		TransparentForward,
-		Skybox,
 
 		HDRSceneComposite,
 
@@ -416,10 +441,30 @@ namespace RendererDefinitions
 		DebugBuild,
 		LineDebug,
 
-		HDRToCubemap,
-		SpecularPrefilter,
-		SHIrradiance,
+		//HDRToCubemap,
+		//SpecularPrefilter,
+		//SHIrradiance,
 		BRDFLUT,
+
+		WorldProbesPrepare,
+		WorldProbesRelight,
+		WorldProbesSkyTrace,
+		WorldProbesInject,
+		WorldProbesRelocate,
+		WorldProbesSkyMean,
+
+		WorldProbesResolve,
+
+		WorldProbesReconstruct,
+		WorldProbesDebug,
+
+		WorldProbesCacheResolve,
+		WorldProbesCacheFallback,
+
+		AtmosphereTransmittance,
+		AtmosphereSkyView,
+		AtmosphereSky,
+		AtmosphereLighting,
 
 		NRDPrepare,
 
@@ -431,15 +476,11 @@ namespace RendererDefinitions
 		BilateralUpsample,
 		AODenoise,
 		GIDenoise,
+		AOAccumulate,
 
-		VolumetricLight,
-		VolumetricLightBlur,
-		VolumetricLightResolve,
-
-		// Volumetric fog
-		//FroxelInject,
-		//FroxelReproject,
-		//FroxelIntegrate,
+		FroxelInject,
+		FroxelReproject,
+		FroxelIntegrate,
 
 		FlareBright,
 		FlareGen,
@@ -481,6 +522,11 @@ namespace RendererDefinitions
 
 	enum class Renderer_RenderTarget
 	{
+		WorldProbeVisibility,
+		WorldProbeLighting,
+		WorldProbeSkyMean,
+		WorldProbeReconstructed,
+		WorldProbeSpatialCache,
 		TransparentAccumulation,
 		TransparentRevealage,
 		TransparentVelocityAccum,
@@ -493,7 +539,11 @@ namespace RendererDefinitions
 		Visibility,
 		AORaw,
 		AOTemp,
+		AOHistoryA,
+		AOHistoryB,
+		AOReconstruction,
 		AoEdgeInfo,
+		BentAOUpsampled,
 		BentNormalAO,
 		BentNormalAOHalf,
 		ColorHistoryA,
@@ -504,10 +554,6 @@ namespace RendererDefinitions
 		Velocity,
 		ViewNormals,
 		PrevViewNormals,
-		VolumetricLight,
-		VolumetricLightBlur,
-		VolLightHistoryA,
-		VolLightHistoryB,
 
 		FroxelScatterExtA,
 		FroxelScatterExtB,
@@ -529,13 +575,10 @@ namespace RendererDefinitions
 		ReflectRadiance,
 		ReflectRoughness,
 
-		//ReflectReprojection,
-		//ReflectRayInfo,
-		//ReflectVarianceA,
-		//ReflectVarianceB,
-		//ReflectHistoryA,
-		//ReflectHistoryB,
-		//ReflectPrefiltered,
+		AtmosphereTransmittance,
+		AtmosphereSkyView,
+		AtmosphereHDR,
+		AtmosphereLighting,
 
 		NRDMotion,
 		NRDNormalRoughness,
@@ -545,18 +588,12 @@ namespace RendererDefinitions
 		// Deferred outputs
 		GBufferAlbedoRough,
 		GBufferNormalMaterial, // N, metal, matID
-		GBufferEmissive,
 
 		// Used as chromatic aberration output
 		PostNonAAComposite,
 
 		// CAS
 		SharpenedColor,
-
-		//AAColor,
-		//CMAA2WorkingEdges,
-		//SMAAEdges,
-		//SMAAWeights,
 
 		ShadingSignalHalf,
 
@@ -569,14 +606,81 @@ namespace RendererDefinitions
 		VolumetricShadowMap,
 		Count
 	};
-
 	inline constexpr size_t RENDER_TARGET_COUNT = static_cast<size_t>(Renderer_RenderTarget::Count);
+
+	struct RenderTargetIDs
+	{
+		uint32_t worldProbeVisibilityID = UINT32_MAX;
+		uint32_t worldProbeLightingID = UINT32_MAX;
+		uint32_t worldProbeSkyMeanID = UINT32_MAX;
+		uint32_t worldProbeReconstructedID = UINT32_MAX;
+		uint32_t transparentAccumulationID = UINT32_MAX;
+		uint32_t transparentRevealageID = UINT32_MAX;
+		uint32_t transparentVelocityAccumID = UINT32_MAX;
+		uint32_t hdrSceneID = UINT32_MAX;
+		uint32_t tonemapID = UINT32_MAX;
+		uint32_t depthResolvedID = UINT32_MAX;
+		uint32_t prevDepthResolvedID = UINT32_MAX;
+		uint32_t hiZID = UINT32_MAX;
+		uint32_t linearizedHiZID = UINT32_MAX;
+		uint32_t visibilityID = UINT32_MAX;
+		uint32_t aoRawID = UINT32_MAX;
+		uint32_t aoTempID = UINT32_MAX;
+		uint32_t aoHistoryAID = UINT32_MAX;
+		uint32_t aoHistoryBID = UINT32_MAX;
+		uint32_t aoReconstructionID = UINT32_MAX;
+		uint32_t aoEdgeInfoID = UINT32_MAX;
+		uint32_t bentAOUpsampledID = UINT32_MAX;
+		uint32_t bentNormalAOID = UINT32_MAX;
+		uint32_t bentNormalAOHalfID = UINT32_MAX;
+		uint32_t colorHistoryAID = UINT32_MAX;
+		uint32_t colorHistoryBID = UINT32_MAX;
+		uint32_t flareBrightID = UINT32_MAX;
+		uint32_t lensFlareColorID = UINT32_MAX;
+		uint32_t bloomMipchainID = UINT32_MAX;
+		uint32_t velocityID = UINT32_MAX;
+		uint32_t viewNormalsID = UINT32_MAX;
+		uint32_t prevViewNormalsID = UINT32_MAX;
+		uint32_t shadowInvalidMaskID = UINT32_MAX;
+		uint32_t rtShadowPenumbraID = UINT32_MAX;
+		uint32_t rtShadowDenoisedID = UINT32_MAX;
+		uint32_t nrdShadowNormalRoughnessID = UINT32_MAX;
+		uint32_t nrdShadowViewZID = UINT32_MAX;
+		uint32_t diffuseRadianceAID = UINT32_MAX;
+		uint32_t diffuseRadianceBID = UINT32_MAX;
+		uint32_t giHistoryAID = UINT32_MAX;
+		uint32_t giHistoryBID = UINT32_MAX;
+		uint32_t indirectSSGIID = UINT32_MAX;
+		uint32_t giDenoisePingID = UINT32_MAX;
+		uint32_t reflectRadianceID = UINT32_MAX;
+		uint32_t reflectRoughnessID = UINT32_MAX;
+		uint32_t atmosphereTransmittanceID = UINT32_MAX;
+		uint32_t atmosphereSkyViewID = UINT32_MAX;
+		uint32_t atmosphereHDRID = UINT32_MAX;
+		uint32_t atmosphereLightingID = UINT32_MAX;
+		uint32_t nrdMotionID = UINT32_MAX;
+		uint32_t nrdNormalRoughnessID = UINT32_MAX;
+		uint32_t nrdViewZID = UINT32_MAX;
+		uint32_t rtReflectDenoisedID = UINT32_MAX;
+		uint32_t gBufferAlbedoRoughID = UINT32_MAX;
+		uint32_t gBufferNormalMaterialID = UINT32_MAX;
+		uint32_t postNonAACompositeID = UINT32_MAX;
+		uint32_t sharpenedColorID = UINT32_MAX;
+		uint32_t shadingSignalHalfID = UINT32_MAX;
+		uint32_t shadingLowAID = UINT32_MAX;
+		uint32_t shadingLowBID = UINT32_MAX;
+		uint32_t ssContactShadowsID = UINT32_MAX;
+		uint32_t directionalCSMAtlasID = UINT32_MAX;
+		uint32_t flashlightShadowMapID = UINT32_MAX;
+		uint32_t volumetricShadowMapID = UINT32_MAX;
+	};
 
 	enum class Renderer_Texture
 	{
 		RainbowLut,
 		CookieGobo,
 		HilbertCurveLut,
+		ShadowSTBN,
 		Dummy,
 		DummyU8,
 		DummyVelocity,
@@ -585,8 +689,6 @@ namespace RendererDefinitions
 		MetalRough,
 		Normal,
 		Checkerboard,
-		//SMAAArea,
-		//SMAASearch,
 
 		Count
 	};
@@ -629,11 +731,15 @@ namespace RendererDefinitions
 		MeshletTriangles,
 		StaticTransforms,
 		Luminance,
-		SHIrradiance,
+		WorldProbes,
+		WorldProbeSchedule,
+		WorldProbeSummary,
 		BLASAddresses,
 		RTRows,
 
 		// Frame — transient
+		WorldProbeFrameInfo,
+		WorldProbeCacheInfo,
 		DynamicTransforms,
 		MotionMatrices,
 		Lights,
@@ -654,12 +760,15 @@ namespace RendererDefinitions
 		DrawStats,
 		DispatchIndirectArgs,
 		TaskDispatch,
+
 		DebugCounts,
 		DebugItems,
 		DebugVertex,
 		DebugDraw,
+
 		VisibleLightCount,
 		VisibleLightIDs,
+
 		ClusterCounts,
 		ClusterOffsets,
 		ClusterCursors,
@@ -667,11 +776,11 @@ namespace RendererDefinitions
 		ClusterTileSliceRanges,
 		ClusterScanScratch,
 		ClusterTileTransparentNear,
-		//Cmaa2Control,
-		//Cmaa2ShapeCandidates,
-		//Cmaa2DeferredLocations,
-		//Cmaa2DeferredItems,
-		//Cmaa2DeferredHeads,
+
+		VolClusterCounts,
+		VolClusterOffsets,
+		VolClusterCursors,
+		VolClusterLightIDs,
 
 		ShadowInvalidVolumes,
 
@@ -710,12 +819,6 @@ namespace RendererDefinitions
 		AA_TAA_CAS,   // Contrast Adaptive Sharpening
 	};
 
-	//enum class ToneMapper
-	//{
-	//	TM_ACESFILM,
-	//	TM_GT7
-	//};
-
 	// Define this somewhere
 	struct alignas(4) RenderToggles
 	{
@@ -751,8 +854,8 @@ namespace RendererDefinitions
 
 		uint32_t activeRTInstances         = 0;
 		uint32_t csmAtlasCached            = 0;
+		uint32_t worldProbesDebugView      = 0;
 		uint32_t pad0;
-		uint32_t pad1;
 	};
 
 	enum class ImageAccess
@@ -764,6 +867,7 @@ namespace RendererDefinitions
 
 		ComputeRead,
 		ComputeWrite,
+		ComputeReadWrite,
 		ComputeReadStorage,
 
 		Read,
@@ -834,7 +938,6 @@ namespace RendererDefinitions
 		Normals,
 		Roughness,
 		Metallic,
-		Emissive,
 		SSGI,
 		SSShadows,
 		Cascades,
@@ -879,7 +982,6 @@ namespace RendererDefinitions
 		{ DebugView::Normals,       "Normals"         },
 		{ DebugView::Roughness,     "Roughness"       },
 		{ DebugView::Metallic,      "Metallic"        },
-		{ DebugView::Emissive,      "Emissive"        },
 		{ DebugView::SSGI,          "SSAO"            },
 		{ DebugView::SSShadows,     "Contact Shadows" },
 		{ DebugView::Cascades,      "Cascade Splits"  },
@@ -893,6 +995,9 @@ namespace RendererDefinitions
 	struct RenderStateInfo
 	{
 	public:
+		void SetWorldProbeSSGIValid(bool value) noexcept { m_worldProbeSSGIValid = value; }
+		bool WorldProbeSSGIValid() const noexcept { return m_worldProbeSSGIValid; }
+
 		void ResetDebugMask() { m_debugState = DebugState::Off; }
 		void SetDebugMask(DebugState mask) { m_debugState = mask; }
 
@@ -954,6 +1059,16 @@ namespace RendererDefinitions
 		bool IsScreenSpaceShadowsOn() const noexcept { return m_renderToggles.enableSSS; }
 		bool IsVolumetricsOn() const noexcept { return m_renderToggles.enableVolumetrics; }
 
+		bool VolumetricFogActive() const noexcept
+		{
+			return IsVolumetricsOn() && InstancesActive() && !DebugRendering();
+		}
+
+		bool IsWorldProbesDebugOn() const noexcept
+		{
+			return m_renderToggles.worldProbesDebugView && InstancesActive() && !DebugRenderFastPath();
+		}
+
 		bool IsTemporalValid() const noexcept { return m_bTemporalValid; }
 		bool IsHiZValid() const noexcept { return m_bHiZValid; }
 
@@ -986,10 +1101,10 @@ namespace RendererDefinitions
 		void SetTemporalIndex(uint64_t index) { m_temporalIndex = index; }
 		uint64_t GetTemporalIndex() const noexcept { return m_temporalIndex; }
 
-
 	private:
 		bool m_bTemporalValid        = false;
 		bool m_bHiZValid             = false;
+		bool m_worldProbeSSGIValid   = false;
 
 		uint64_t m_temporalIndex = UINT32_MAX;
 

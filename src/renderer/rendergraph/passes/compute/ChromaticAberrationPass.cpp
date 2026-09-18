@@ -22,7 +22,7 @@ void RegisterChromaticAberrationPass(RenderGraph& graph)
 					[](const RenderPassExecutionContext& ctx)
 					{
 						return
-							ctx.profiler->debugToggles.enableChromaticAberration &&
+							ctx.frameState->IsChromaticAberrationOn() &&
 							ctx.frameState->InstancesActive() &&
 							!ctx.frameState->DebugRendering();
 					})
@@ -47,6 +47,8 @@ void RegisterChromaticAberrationPass(RenderGraph& graph)
 
 						pass.scope = ComputeScope{{ graph.GetDisplayExtent() }};
 						auto& pso = std::get<ComputeScope>(pass.scope);
+
+						pso.SetPush(ctx.profiler->caPush);
 
 						const auto& tonemap = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::Tonemap);
 						const auto& postNonAA = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::PostNonAAComposite);

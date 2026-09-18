@@ -13,6 +13,7 @@ struct PipelineHandle;
 class PipelineManager;
 class JobSystem;
 class FrameContext;
+class Device;
 
 class GraphicsScope;
 class ComputeScope;
@@ -73,13 +74,7 @@ public:
 	// across frames (transitioning FROM Undefined discards contents, which
 	// would silently destroy history targets), so resize is the only time
 	// it may be reset.
-	void InvalidateTrackedLayouts()
-	{
-		m_trackedLayouts.fill(RD::ImageAccess::Undefined);
-
-		for (auto& pass : m_passes)
-			pass.pushWriter.Clear();
-	}
+	void InvalidateTrackedLayouts();
 
 	void NotifyLayout(RD::Renderer_RenderTarget target, RD::ImageAccess access)
 	{
@@ -90,6 +85,15 @@ public:
 	void SetDisplayExtent(Extents2D extent) { m_displayExtent = extent; }
 	const Extents2D& GetRenderExtent() const noexcept { return m_renderExtent; }
 	const Extents2D& GetDisplayExtent() const noexcept { return m_displayExtent; }
+
+	void SetDevice(const Device& device) noexcept { m_device = &device; }
+
+	bool IsResourceActive(const RenderResourceUsage& res) const;
+
+	bool FindImageUse(
+		const SubmitBatch& batch,
+		RD::Renderer_RenderTarget target,
+		ImageUse& out) const;
 
 private:
 	RenderPassDesc& CreatePass(
@@ -127,6 +131,7 @@ private:
 		VkCommandBuffer primary,
 		RenderPassExecutionContext& baseCtx,
 		const RecordHooks& hooks,
+		const char* batchName,
 		bool bFirstGraphicsBatch,
 		bool bLastGraphicsBatch);
 
@@ -134,7 +139,8 @@ private:
 		SubmitBatch& batch,
 		VkCommandBuffer primary,
 		BindlessImageTable& imageTable,
-		const RecordHooks& hooks);
+		const RecordHooks& hooks,
+		const char* batchName);
 
 	void FlushBakedBarriers(
 		VkCommandBuffer cmd,
@@ -163,6 +169,8 @@ private:
 	RD::RenderStateInfo m_recentFrameState{};
 
 	bool m_bGraphDirty = true;
+
+	const Device* m_device = nullptr;
 
 	Extents2D m_renderExtent;
 	Extents2D m_displayExtent;

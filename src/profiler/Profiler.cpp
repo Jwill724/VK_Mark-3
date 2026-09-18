@@ -3,6 +3,7 @@
 #include "Profiler.h"
 #include "renderer/Frame/FrameContext.h"
 #include "../renderer/backend/VulkanTypes.h"
+#include "../renderer/backend/Device.h"
 
 // -----------------------------------------------------------------------------
 // Internal helpers
@@ -22,6 +23,9 @@ namespace
 		QueryPerformanceFrequency(&frequency);
 		return frequency.QuadPart;
 	}
+
+	constexpr float kLabelGraphics[4] = { 0.35f, 0.62f, 0.90f, 1.0f };
+	constexpr float kLabelAsync[4] = { 0.95f, 0.65f, 0.25f, 1.0f };
 }
 
 // -----------------------------------------------------------------------------
@@ -179,7 +183,18 @@ Profiler::ScopedPass::ScopedPass(
 	stats.asyncQueueThisFrame = (queue == PassQueue::AsyncCompute);
 
 	m_cpuStartTicks = queryPerformanceCounterTicks();
-	m_gpuZone       = m_profiler->BeginTracyGpuZone(cmd, ID, threadSlot, queue);
+
+	if (m_cmd != VK_NULL_HANDLE && m_profiler->m_device != nullptr)
+	{
+		m_profiler->m_device->BeginDebugLabel(
+			m_cmd,
+			stats.name.c_str(),
+			(queue == PassQueue::AsyncCompute) ? kLabelAsync : kLabelGraphics);
+
+		m_bLabelBegun = true;
+	}
+
+	m_gpuZone = m_profiler->BeginTracyGpuZone(cmd, ID, threadSlot, queue);
 
 	if (m_frameCtx == nullptr || m_cmd == VK_NULL_HANDLE) return;
 
@@ -260,6 +275,12 @@ Profiler::ScopedPass::~ScopedPass()
 	}
 
 	m_profiler->EndTracyGpuZone(m_gpuZone);
+
+	if (m_bLabelBegun)
+	{
+		ASSERT(m_profiler->m_device != nullptr);
+		m_profiler->m_device->EndDebugLabel(m_cmd);
+	}
 }
 
 Profiler::ScopedPass::ScopedPass(ScopedPass&& other) noexcept
@@ -273,6 +294,7 @@ Profiler::ScopedPass::ScopedPass(ScopedPass&& other) noexcept
 	, m_bTimestampWritten(other.m_bTimestampWritten)
 	, m_threadSlot(other.m_threadSlot)
 	, m_queue(other.m_queue)
+	, m_bLabelBegun(other.m_bLabelBegun)
 {
 	other.m_profiler          = nullptr;
 	other.m_frameCtx          = nullptr;
@@ -284,6 +306,7 @@ Profiler::ScopedPass::ScopedPass(ScopedPass&& other) noexcept
 	other.m_bTimestampWritten = false;
 	other.m_threadSlot        = 0u;
 	other.m_queue             = PassQueue::Graphics;
+	other.m_bLabelBegun       = false;
 }
 
 Profiler::ScopedPass& Profiler::ScopedPass::operator=(ScopedPass&& other) noexcept
@@ -302,6 +325,7 @@ Profiler::ScopedPass& Profiler::ScopedPass::operator=(ScopedPass&& other) noexce
 	m_bTimestampWritten = other.m_bTimestampWritten;
 	m_threadSlot        = other.m_threadSlot;
 	m_queue             = other.m_queue;
+	m_bLabelBegun       = other.m_bLabelBegun;
 
 	other.m_profiler          = nullptr;
 	other.m_frameCtx          = nullptr;
@@ -313,6 +337,7 @@ Profiler::ScopedPass& Profiler::ScopedPass::operator=(ScopedPass&& other) noexce
 	other.m_bTimestampWritten = false;
 	other.m_threadSlot        = 0u;
 	other.m_queue             = PassQueue::Graphics;
+	other.m_bLabelBegun       = false;
 
 	return *this;
 }

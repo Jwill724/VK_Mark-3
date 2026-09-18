@@ -22,11 +22,7 @@ void RegisterVolumetricShadowMapPass(RenderGraph& graph)
 				.SetExecutionCondition(
 					[](const RenderPassExecutionContext& ctx)
 					{
-						return
-							ctx.frameState->IsVolumetricsOn() &&
-							//ctx.scene->GetVolumetricShadowInfo().params.y != 0.0f &&
-							ctx.frameState->InstancesActive() &&
-							!ctx.frameState->DebugRenderFastPath();
+						return ctx.frameState->VolumetricFogActive();
 					})
 
 				.WriteResource(

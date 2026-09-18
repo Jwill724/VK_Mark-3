@@ -14,6 +14,33 @@ namespace LightingSystem
 	const uint32_t& GetActiveLightCount() { return _activeLightCount; }
 	const uint32_t& GetLightBufferCount() { return _lightBufferCount; }
 
+	static float LumensToIntensity(const LocalLight& l)
+	{
+		if ((l.flags & RD::LIGHT_FLAG_SPOT) == 0u)
+			return l.lumens * (1.0f / (4.0f * glm::pi<float>()));
+
+		const float cosOuter = glm::clamp(l.outerCos, -1.0f, 1.0f);
+		const float solidAngle = 2.0f * glm::pi<float>() * (1.0f - cosOuter);
+
+		return l.lumens / std::max(solidAngle, 1e-3f);
+	}
+
+	void ResolveLightUnits(float adaptedEV100)
+	{
+		const float quantizedEV = std::round(adaptedEV100 * 2.0f) * 0.5f;
+
+		for (size_t i = 0; i < _globalLightList.size(); ++i)
+		{
+			LocalLight& light = _globalLightList[i];
+
+			light.intensity = LumensToIntensity(light);
+
+			if (i == RD::LIGHT_LIST_SLOT_FLASHLIGHT) continue;
+
+			light.radius = LightUnits::LightRadiusFromIntensity(light.intensity, quantizedEV);
+		}
+	}
+
 	static bool isLightIDAlive(uint32_t lightID) {
 		if (lightID >= _lightIDTable.alive.size()) return false;
 		return _lightIDTable.alive[lightID] != 0;
@@ -80,8 +107,7 @@ namespace LightingSystem
 		defaultLight.flags |= RD::LIGHT_FLAG_POINT;
 		defaultLight.color = glm::vec3(1.0f);
 		defaultLight.position = glm::vec3(0.0f);
-		defaultLight.radius = 1.5f;
-		defaultLight.intensity = 5.0f;
+		defaultLight.lumens = LightUnits::LM_BULB_60W;
 
 		activateLight(std::move(defaultLight), newID);
 	}
@@ -106,17 +132,29 @@ namespace LightingSystem
 			(rand03 * 2.0f - 1.0f) * (posRange * 1.5f)
 		);
 
+		static constexpr float kFixtures[] = {
+			LightUnits::LM_CANDLE,
+			LightUnits::LM_BULB_40W,
+			LightUnits::LM_BULB_60W,
+			LightUnits::LM_BULB_100W,
+			LightUnits::LM_CEILING_FIXTURE,
+		};
+
+		const uint32_t pick = static_cast<uint32_t>(rand()) % std::size(kFixtures);
+		randomLight.lumens = kFixtures[pick];
+
 		randomLight.flags |= RD::LIGHT_FLAG_POINT;
-		randomLight.radius = 4.0f;
-		randomLight.intensity = 20.0f;
 
 		const float rand09 = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
 		randomLight.sourceRadius = glm::mix(0.03f, 0.30f, rand09 * rand09);
 
-		glm::vec3 colorA = glm::vec3(rand06, rand07, rand08);
 		const float minColor = 0.1f;
 		const float maxColor = 1.0f;
-		randomLight.color = glm::clamp(colorA, glm::vec3(minColor), glm::vec3(maxColor));
+		glm::vec3 colorA = glm::clamp(
+			glm::vec3(rand06, rand07, rand08), glm::vec3(minColor), glm::vec3(maxColor));
+
+		const float lum = 0.2126f * colorA.r + 0.7152f * colorA.g + 0.0722f * colorA.b;
+		randomLight.color = colorA / std::max(lum, 1e-4f);
 
 		activateLight(std::move(randomLight), newID);
 	}
@@ -253,12 +291,14 @@ uint32_t LightingSystem::AddSceneLight(const SceneLightDesc& desc)
 	light.position = desc.position;
 	light.direction = desc.direction;
 	light.color = desc.color;
-	light.intensity = desc.intensity;
-	light.radius = desc.range;
 	light.innerCos = desc.innerCos;
 	light.outerCos = desc.outerCos;
 	light.sourceRadius = 0.0f;
 	light.sourceLength = 0.0f;
+
+	light.lumens = (typeFlag == RD::LIGHT_FLAG_SPOT)
+		? desc.intensity * (2.0f * glm::pi<float>() * (1.0f - glm::clamp(light.outerCos, -1.0f, 1.0f)))
+		: desc.intensity * (4.0f * glm::pi<float>());
 
 	const uint32_t id = allocateLightID();
 	activateLight(std::move(light), id);
@@ -336,7 +376,7 @@ bool Flashlight::UpdateFlashLight(
 		m_bLightStateUpdated = true;
 	}
 
-	intensity = LightingSystem::_flashlightSettings.intensity;
+	lumens = LightingSystem::_flashlightSettings.lumens;
 	sourceRadius = LightingSystem::_flashlightSettings.sourceRadius;
 
 	// Matrix update
@@ -373,7 +413,7 @@ bool Flashlight::UpdateFlashLight(
 
 		ViewProj = proj * view;
 	}
- 
+
 	// Push to global list
 	const bool lightDirty = m_bLightStateUpdated || m_flashlightFlagsChanged;
 	if (lightDirty) {
@@ -540,8 +580,9 @@ void Flashlight::Init(uint32_t shadowMapID, uint32_t cookieGoboID)
 	m_shadowMapID = shadowMapID;
 	m_cookieGoboID = cookieGoboID;
 	flags |= RD::LIGHT_FLAG_SPOT;
-	intensity = LightingSystem::_flashlightSettings.intensity;
 	radius = LightingSystem::_flashlightSettings.radius;
+
+	lumens = LightingSystem::_flashlightSettings.lumens;
 	sourceRadius = LightingSystem::_flashlightSettings.sourceRadius;
 
 	outerCos = std::cos(glm::radians(LightingSystem::_flashlightSettings.outerDeg));

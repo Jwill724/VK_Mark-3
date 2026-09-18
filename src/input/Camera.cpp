@@ -10,7 +10,11 @@ namespace UI = UserInput;
 void Camera::ProcessInput(GLFWwindow* window, Profiler& profiler, const Extents2D& drawExtent, bool& isTemporalInvalid)
 {
 	UI::UpdateCachedWindowExtent(drawExtent.Width(), drawExtent.Height());
-	UI::updateLocalInput(window);
+
+	if (!isTemporalInvalid)
+	{
+		UI::updateLocalInput(window);
+	}
 
 	m_delta = UI::mouse.delta;
 

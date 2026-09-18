@@ -1,0 +1,133 @@
+#version 460
+
+#extension GL_GOOGLE_include_directive : require
+
+#include "../include/nrd_common.glsl"
+#include "../include/rt_shadow_common.glsl"
+#include "../include/depth.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = PUSH_SET, binding = PUSH_BINDING_READ_1) uniform sampler2D uDepth;
+layout(set = PUSH_SET, binding = PUSH_BINDING_READ_2) uniform sampler2D uViewNormals;
+layout(set = PUSH_SET, binding = PUSH_BINDING_READ_3) uniform sampler2D uVelocity;
+layout(set = PUSH_SET, binding = PUSH_BINDING_READ_4) uniform sampler2D uPrevDepth;
+layout(set = PUSH_SET, binding = PUSH_BINDING_READ_5) uniform sampler2D uShadowPrev;
+layout(set = PUSH_SET, binding = PUSH_BINDING_READ_6) uniform usampler2D uShadowInvalid;
+layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1, r32f) uniform writeonly image2D uPenumbraOut;
+
+uint rtShadowRefreshHash(uint x)
+{
+	x ^= x >> 16u;
+	x *= 0x7feb352du;
+	x ^= x >> 15u;
+	x *= 0x846ca68bu;
+	x ^= x >> 16u;
+	return x;
+}
+
+bool rtShadowRefreshPixel(ivec2 px, uint frameIndex)
+{
+	uint period = max(RT_SHADOW_LIT_REFRESH_FRAMES, 1u);
+	uint block = frameIndex / period;
+	uint pixelKey = uint(px.x) * 0x9e3779b9u ^ uint(px.y) * 0x85ebca6bu;
+
+	// One refresh per period for a fixed screen pixel. Change its phase each
+	// block so sparse refresh does not stay locked to a subset of noise frames.
+	uint phase = rtShadowRefreshHash(pixelKey ^ rtShadowRefreshHash(block)) % period;
+	return frameIndex % period == phase;
+}
+
+bool rtShadowHistoryIsLit(vec2 prevUv, float epsilon)
+{
+	// Four gathers cover a contiguous 4x4 footprint around the reprojected UV.
+	vec4 a = textureGatherOffset(uShadowPrev, prevUv, ivec2(-1, -1), 0);
+	vec4 b = textureGatherOffset(uShadowPrev, prevUv, ivec2( 1, -1), 0);
+	vec4 c = textureGatherOffset(uShadowPrev, prevUv, ivec2(-1,  1), 0);
+	vec4 d = textureGatherOffset(uShadowPrev, prevUv, ivec2( 1,  1), 0);
+
+	vec4 threshold = vec4(1.0 - epsilon);
+	return all(greaterThanEqual(a, threshold))
+		&& all(greaterThanEqual(b, threshold))
+		&& all(greaterThanEqual(c, threshold))
+		&& all(greaterThanEqual(d, threshold));
+}
+
+void main()
+{
+	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 res = ivec2(sp.resolution);
+	bool inBounds = all(lessThan(px, res));
+
+	SceneData sd = getSceneData();
+	RTRayListBuffer rays = getRTRayListBuffer();
+	float depth = 0.0;
+	bool sky = true;
+
+	if (inBounds)
+	{
+		depth = texelFetch(uDepth, px, 0).r;
+		sky = depth <= DEPTH_EPSILON_REVERSED_Z;
+	}
+
+	bool needsRay = false;
+	float staticHit = NRD_FP16_MAX;
+
+	if (inBounds && !sky)
+	{
+		vec3 nVS = octDecode(texelFetch(uViewNormals, px, 0).rg * 2.0 - 1.0);
+		if (dot(nVS, vec3(sp.shadow.sunDirectionVS)) <= 0.0)
+			staticHit = 0.0;
+		else
+			needsRay = true;
+	}
+
+	if (needsRay && sd.temporal.y != 0u
+		&& !rtShadowRefreshPixel(px, sd.temporal.x)
+		&& texelFetch(uShadowInvalid, px >> 3, 0).r == 0u)
+	{
+		vec2 uv = (vec2(px) + 0.5) * sp.invResolution;
+		vec2 prevUv = uv - texelFetch(uVelocity, px, 0).rg;
+
+		// Keep the full gather footprint inside valid history.
+		vec2 historyMargin = 2.0 * sp.invResolution;
+		if (all(greaterThanEqual(prevUv, historyMargin))
+			&& all(lessThan(prevUv, vec2(1.0) - historyMargin)))
+		{
+			ivec2 ppx = clamp(ivec2(prevUv * sp.resolution), ivec2(0), res - 1);
+			float prevDepth = texelFetch(uPrevDepth, ppx, 0).r;
+
+			if (prevDepth > DEPTH_EPSILON_REVERSED_Z)
+			{
+				// Retain the supplied engine's existing view-depth rejection convention.
+				float viewZ = screenToViewDepth(depth, sd.depthLinearizeMult, sd.depthLinearizeAdd);
+				float prevViewZ = screenToViewDepth(prevDepth, sd.depthLinearizeMult, sd.depthLinearizeAdd);
+				float tolerance = max(abs(viewZ), 1e-4) * max(sp.disocclusionScale, 0.0);
+				float epsilon = clamp(sp.saturationEps, 0.0, RT_SHADOW_MAX_REUSE_EPS);
+
+				if (abs(prevViewZ - viewZ) < tolerance && rtShadowHistoryIsLit(prevUv, epsilon))
+				{
+					staticHit = NRD_FP16_MAX;
+					needsRay = false;
+				}
+			}
+		}
+	}
+
+	// Keep every invocation participating until after subgroup compaction.
+	uint slot = rtCompactAppend(rays, RT_RAY_SLOT_SHADOW,
+		sp.rayBase, sp.rayCapacity, needsRay);
+
+	if (!inBounds) return;
+	if (needsRay && slot != RT_INVALID_SLOT)
+	{
+		rays.payload[slot] = rtPackPixel(uvec2(px));
+		return;
+	}
+
+	// Zero is reserved for NoL <= 0. Denoised darkness contains no blocker
+	// distance, so shadowed front-facing surfaces must go through tracing.
+	// Retain the original lit fallback if the ray list overflows.
+	imageStore(uPenumbraOut, px,
+		vec4(SIGMA_FrontEnd_PackPenumbra(staticHit, TAN_SUN_ANGULAR_RADIUS)));
+}

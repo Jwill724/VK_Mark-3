@@ -1,0 +1,321 @@
+#version 460
+
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_ray_query : require
+
+#include "../include/world_probe.glsl"
+#include "../include/world_probe_rt.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1, rg8) uniform image2D worldProbeVisibility;
+
+layout(push_constant, scalar) uniform WPPush
+{
+	uvec4 update;
+} pc;
+
+shared vec4 directions[64];
+shared vec4 radiance[64];
+shared float distances[64];
+shared uint classes[64];
+shared vec2 encodedMoments[64];
+shared uint insideProbe;
+
+void main()
+{
+	uint id;
+
+	if (!wpScheduledProbe(pc.update.x, gl_WorkGroupID.x, id)) return;
+
+	uint lane = gl_LocalInvocationIndex;
+
+	WorldProbeBuffer b = getWorldProbeBuffer();
+
+	WPHeader h = b.header;
+	WPCascadeDesc c = h.cascades[id / WP_PER_CASCADE];
+
+	bool quarter =
+		pc.update.x == WP_QUEUE_SCROLL_QUARTER &&
+		(h.schedule.w & 1u) != 0u;
+
+	uint uniqueCount = quarter ? 16u : 64u;
+
+	vec3 position = b.probes[id].position.xyz;
+
+	bool oldValid =
+		b.probes[id].meta.w != 0u &&
+		(b.probes[id].cell.w & WP_FLAG_MOVED) == 0;
+
+	bool historyValid =
+		oldValid &&
+		!quarter &&
+		(b.probes[id].cell.w & WP_FLAG_QUARTER_TRACE) == 0 &&
+		b.probes[id].state.w == h.revisions.w;
+
+	float history = historyValid ? h.blend.x : 0.0;
+
+	float skyHistory =
+		historyValid &&
+		b.probes[id].state.z == h.revisions.z ?
+		h.blend.x : 0.0;
+
+	if (lane < uniqueCount)
+	{
+		uint ray = quarter ? lane | WP_QUARTER_DIRECTION : lane;
+
+		vec3 v = wpOctVector(wpRayUV(ray));
+		float len = length(v);
+		vec3 dir = v / len;
+
+		WPHit hit = wpTrace(position, dir, c.trace.w, c.trace.x);
+
+		uint cls = !hit.hit ? 0u : (hit.backface ? 2u : 1u);
+
+		vec4 sky = vec4(
+			cls == 0u ? wpSkyAt(position, dir, h) : vec3(0),
+			cls == 0u ? 1.0 : 0.0);
+
+		// Logical replication uses 1/64 weights, so the four copies together have
+		// the same quadrature weight as the unique 1/16 quarter sample.
+		vec4 direction = vec4(
+			dir,
+			4.0 / (64.0 * len * len * len));
+
+		if (quarter)
+		{
+			uvec2 block = uvec2(lane & 3u, lane >> 2u) * 2u;
+
+			for (uint k = 0u; k < 4u; ++k)
+			{
+				uvec2 t = block + uvec2(k & 1u, k >> 1u);
+				uint i = t.x + t.y * 8u;
+
+				directions[i] = direction;
+				distances[i] = hit.distance;
+				classes[i] = cls;
+				radiance[i] = sky;
+			}
+		}
+		else
+		{
+			directions[lane] = direction;
+			distances[lane] = hit.distance;
+			classes[lane] = cls;
+			radiance[lane] = sky;
+		}
+	}
+
+	barrier();
+
+	if (lane == 0u)
+	{
+		WPTraceSummary summary;
+
+		summary.distance = vec4(1e30, 0.0, 1e30, 0.0);
+		summary.direction = uvec4(0u);
+		summary.counts = uvec4(0u, 0u, uniqueCount, 1u);
+
+		for (uint q = 0u; q < uniqueCount; ++q)
+		{
+			uint i = quarter ?
+				(q & 3u) * 2u + (q >> 2u) * 16u :
+				q;
+
+			uint ray = quarter ?
+				q | WP_QUARTER_DIRECTION :
+				q;
+
+			float t = distances[i];
+
+			if (classes[i] == 1u)
+			{
+				++summary.counts.x;
+
+				if (t < summary.distance.x)
+				{
+					summary.distance.x = t;
+					summary.direction.x = ray;
+				}
+
+				if (t > summary.distance.y)
+				{
+					summary.distance.y = t;
+					summary.direction.y = ray;
+				}
+			}
+			else if (classes[i] == 2u)
+			{
+				++summary.counts.y;
+
+				if (t < summary.distance.z)
+				{
+					summary.distance.z = t;
+					summary.direction.z = ray;
+				}
+
+				if (t > summary.distance.w)
+				{
+					summary.distance.w = t;
+					summary.direction.w = ray;
+				}
+			}
+		}
+
+		insideProbe =
+			float(summary.counts.y) / float(uniqueCount) >= h.relocation0.y ?
+			1u : 0u;
+
+		getWorldProbeSummaryBuffer().summaries[id] = summary;
+	}
+
+	barrier();
+
+	vec3 destination = wpRayDirection(lane);
+
+	vec2 moments = vec2(0);
+	float weight = 0.0;
+
+	for (uint i = 0u; i < 64u; ++i)
+	{
+		float w = pow(
+			max(dot(directions[i].xyz, destination), 0.0),
+			h.relocation1.w);
+
+		float z = clamp(distances[i] / c.trace.y, 0.0, 1.0);
+
+		moments += vec2(z, z * z) * w;
+		weight += w;
+	}
+
+	moments /= max(weight, 1e-8);
+
+	ivec2 pixel =
+		wpInteriorBase(id) +
+		ivec2(lane & 7u, lane >> 3u);
+
+	if (history > 0.0)
+	{
+		moments = mix(
+			moments,
+			imageLoad(worldProbeVisibility, pixel).rg,
+			history);
+	}
+
+	float meanQ =
+		round(clamp(moments.x, 0.0, 1.0) * 255.0) / 255.0;
+
+	float secondQ =
+		ceil(
+			clamp(
+				max(moments.y, meanQ * meanQ),
+				0.0,
+				1.0) *
+			255.0) /
+		255.0;
+
+	encodedMoments[lane] = vec2(meanQ, secondQ);
+
+	imageStore(
+		worldProbeVisibility,
+		pixel,
+		vec4(meanQ, secondQ, 0, 0));
+
+	if (lane < 4u)
+	{
+		uint mask = 0u;
+
+		for (uint i = 0u; i < 16u; ++i)
+		{
+			mask |= classes[lane * 16u + i] << (2u * i);
+		}
+
+		b.probes[id].rayClassMask[lane] = mask;
+	}
+
+	if (lane < 6u)
+	{
+		vec4 sum = vec4(0);
+		float norm = 0.0;
+
+		for (uint i = 0u; i < 64u; ++i)
+		{
+			float w =
+				max(dot(WP_AXES[lane], directions[i].xyz), 0.0) *
+				directions[i].w;
+
+			sum += radiance[i] * w;
+			norm += w;
+		}
+
+		b.probes[id].sky[lane] =
+			insideProbe != 0u ?
+			vec4(0) :
+			mix(
+				sum / max(norm, 1e-8),
+				b.probes[id].sky[lane],
+				skyHistory);
+
+		if (insideProbe != 0u)
+		{
+			b.probes[id].bounce[lane] = vec4(0);
+		}
+	}
+
+	memoryBarrierImage();
+
+	barrier();
+
+	// 10 top + 10 bottom + 8 left + 8 right texels, including all four corners.
+	if (lane < 36u)
+	{
+		ivec2 t =
+			lane < 10u ? ivec2(lane, 0) :
+			lane < 20u ? ivec2(lane - 10u, 9) :
+			lane < 28u ? ivec2(0, lane - 19u) :
+			ivec2(9, lane - 27u);
+
+		ivec2 source = wpFoldBorder(t);
+
+		imageStore(
+			worldProbeVisibility,
+			wpInteriorBase(id) - 1 + t,
+			vec4(
+				encodedMoments[source.x + source.y * 8],
+				0,
+				0));
+	}
+
+	if (lane == 0u)
+	{
+		int flags =
+			b.probes[id].cell.w &
+			~(
+				WP_FLAG_MOVED |
+				WP_FLAG_NEEDS_FULL_TRACE |
+				WP_FLAG_QUARTER_TRACE |
+				WP_FLAG_INSIDE);
+
+		if (quarter)
+		{
+			flags |= WP_FLAG_QUARTER_TRACE;
+		}
+
+		if (insideProbe != 0u)
+		{
+			flags |= WP_FLAG_INSIDE;
+		}
+
+		b.probes[id].cell.w = flags;
+
+		b.probes[id].state = uvec4(
+			insideProbe == 0u ? 1u : 0u,
+			h.revisions.y,
+			h.revisions.z,
+			h.revisions.w);
+
+		b.probes[id].meta.x = h.revisions.x;
+		b.probes[id].meta.y = h.revisions.x;
+		b.probes[id].meta.w = min(b.probes[id].meta.w + 1u, 1024u);
+	}
+}

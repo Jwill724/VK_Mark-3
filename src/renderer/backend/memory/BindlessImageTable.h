@@ -21,14 +21,14 @@ namespace ImageSpecs
 #define GI_RESOLVED_A RD::Renderer_RenderTarget::GIHistoryA
 #define GI_RESOLVED_B RD::Renderer_RenderTarget::GIHistoryB
 
-#define VOL_LIGHT_RESOLVED_A RD::Renderer_RenderTarget::VolLightHistoryA
-#define VOL_LIGHT_RESOLVED_B RD::Renderer_RenderTarget::VolLightHistoryB
-
 #define FROXEL_SCATTER_RESOLVED_A RD::Renderer_RenderTarget::FroxelScatterExtA
 #define FROXEL_SCATTER_RESOLVED_B RD::Renderer_RenderTarget::FroxelScatterExtB
 
 #define SHADING_LOW_RESOLVED_A RD::Renderer_RenderTarget::ShadingLowA
 #define SHADING_LOW_RESOLVED_B RD::Renderer_RenderTarget::ShadingLowB
+
+#define AO_RESOLVED_A RD::Renderer_RenderTarget::AOHistoryA
+#define AO_RESOLVED_B RD::Renderer_RenderTarget::AOHistoryB
 
 class Allocator;
 class StagingBuffer;
@@ -41,7 +41,6 @@ class BindlessImageTable final
 public:
 	void Init(
 		Extents3D drawExtent,
-		uint32_t environmentSetCount,
 		RD::ShadowQuality shadowQuality,
 		VkDevice device,
 		Allocator& allocator);
@@ -51,7 +50,7 @@ public:
 	void UploadStaticTextures(StagingBuffer& staging, VkCommandBuffer cmd);
 	void UploadEquirects(
 		std::span<const char* const> hdrPaths,
-		Allocator&                   allocator,
+		Allocator& allocator,
 		VkCommandBuffer              cmd);
 	void FreeEquirects(Allocator& allocator);
 
@@ -82,14 +81,14 @@ public:
 	size_t CalcStaticTexturesStagingSize() const;
 
 	// --- Environment sets ---
-	const EnvironmentSet&  GetEnvironmentSet(uint32_t index)        const;
-	EnvironmentSet&        GetEnvironmentSetMutable(uint32_t index);
+	const EnvironmentSet& GetEnvironmentSet(uint32_t index)        const;
+	EnvironmentSet& GetEnvironmentSetMutable(uint32_t index);
 	uint32_t               EnvironmentSetCount()                    const noexcept;
 
 	// --- Asset textures ---
 	uint32_t              PushAssetTexture(AllocatedImage image);
 	const AllocatedImage& GetAssetTexture(uint32_t index)           const;
-	AllocatedImage&       GetAssetTextureMutable(uint32_t index);
+	AllocatedImage& GetAssetTextureMutable(uint32_t index);
 	void                  FreeAssetTexture(uint32_t index);
 	uint32_t              AssetTextureCount()                 const noexcept { return static_cast<uint32_t>(m_assetTextures.size()); }
 	bool                  IsAssetTextureValid(uint32_t index) const noexcept;
@@ -101,8 +100,8 @@ public:
 	std::vector<uint32_t> UploadAssetTextures(
 		SceneUploadBatch& batch,
 		VkDevice          device,
-		Allocator&        allocator,
-		StagingBuffer&    staging,
+		Allocator& allocator,
+		StagingBuffer& staging,
 		VkCommandBuffer   cmd);
 
 	std::span<const AllocatedImage> GetAssetTextureSpan()   const noexcept { return m_assetTextures; }
@@ -115,23 +114,41 @@ public:
 	void     PushCombinedBatch(std::span<AllocatedImage> images, VkSampler sampler);
 	uint32_t PushSamplerCube(VkImageView view, VkSampler sampler);
 
-	void RegisterShadowMapsAsCombined(VkSampler shadowSampler);
+	// All non-volume render targets own stable compact descriptor slots.
+	// Descriptor indices are NOT Renderer_RenderTarget enum values.
+	void RegisterRenderTargetsAsCombined();
 	void RegisterStaticTexturesAsCombined(VkSampler genericSampler);
 	void RegisterEnvironmentSetAsCube(uint32_t envSetIndex, VkSampler skyboxSampler,
-									  VkSampler specularSampler, VkSampler irradianceSampler);
+		VkSampler specularSampler, VkSampler irradianceSampler);
 
 	const std::vector<VkDescriptorImageInfo>& GetCombinedSamplerArray() const noexcept { return m_combinedViews; }
 	const std::vector<VkDescriptorImageInfo>& GetSamplerCubeArray()     const noexcept { return m_samplerCubeViews; }
 	uint32_t CombinedSamplerCount() const noexcept { return static_cast<uint32_t>(m_combinedViews.size()); }
 	uint32_t SamplerCubeCount()     const noexcept { return static_cast<uint32_t>(m_samplerCubeViews.size()); }
+	uint32_t RenderTargetCombinedBegin() const noexcept { return m_renderTargetCombinedBegin; }
+	uint32_t RenderTargetCombinedEnd()   const noexcept { return m_renderTargetCombinedEnd; }
+	RD::RenderTargetIDs GetRenderTargetIDs() const;
+	uint32_t GetRenderTargetCombinedID(RD::Renderer_RenderTarget slot) const noexcept
+	{
+		ASSERT(m_bRenderTargetsRegistered);
+		ASSERT(static_cast<size_t>(slot) < RD::RENDER_TARGET_COUNT);
+		return m_renderTargetCombinedIDs[static_cast<size_t>(slot)];
+	}
 
 	void ClearDescriptorArrays()
 	{
 		std::scoped_lock l(m_combinedMutex, m_samplerCubeMutex);
+
 		m_combinedViews.clear();
 		m_combinedViewHashToID.clear();
 		m_samplerCubeViews.clear();
 		m_samplerCubeViewHashToID.clear();
+
+		m_renderTargetCombinedBegin = 0u;
+		m_renderTargetCombinedEnd = 0u;
+		m_staticTextureCombinedEnd = 0u;
+		m_renderTargetCombinedIDs.fill(UINT32_MAX);
+		m_bRenderTargetsRegistered = false;
 	}
 
 	void BuildInitialCombinedSamplerArray();
@@ -154,7 +171,9 @@ private:
 	void CreateShadowMaps(RD::ShadowQuality quality, Allocator& allocator);
 	void CreateFroxelFogTargets(Allocator& allocator);
 	void CreateSamplers(VkDevice device);
+	void CreateAtmosphereTargets(Allocator& allocator);
 
+	void FreeAtmosphereTargets(Allocator& allocator);
 	void FreeRenderTargets(Allocator& allocator);
 	void FreeShadowMaps(Allocator& allocator);
 	void FreeFroxelFogTargets(Allocator& allocator);
@@ -170,22 +189,25 @@ private:
 	uint32_t PushCombinedLocked(VkImageView view, VkSampler sampler);
 	uint32_t PushSamplerCubeLocked(VkImageView view, VkSampler sampler);
 	void UpdateCombinedLocked(uint32_t index, VkImageView view, VkSampler sampler);
+	VkSampler ResolveRenderTargetSampler(RD::Renderer_RenderTarget slot) const;
+	bool IsRenderTargetCombinedRangeBuilt() const noexcept;
 
 	std::array<AllocatedImage, RD::RENDER_TARGET_COUNT>                         m_renderTargets{};
 	std::array<AllocatedImage, RD::STATIC_TEXTURE_COUNT>                        m_staticTextures{};
 	std::array<EnvironmentSet, static_cast<size_t>(RD::MAX_ENVIRONMENT_SETS)>   m_environmentSets{};
-	std::array<VkSampler,      RD::SAMPLER_COUNT>                               m_samplers{};
+	std::array<VkSampler, RD::SAMPLER_COUNT>                               m_samplers{};
 	std::vector<AllocatedImage>                                                 m_assetTextures{};
 	std::vector<VkSampler>                                                      m_assetSamplers{};
 	std::vector<SamplerDesc>                                                    m_assetSamplerDescs{};
 	std::unordered_map<std::string, AssetTextureEntry>                          m_assetTextureCache{};
 	std::mutex                                                                  m_assetTextureCacheMutex{};
 
-	bool     m_bAreShadowsCreated   = false;
+	bool     m_bAreAtmosphereTargetsCreated = false;
+	bool     m_bAreShadowsCreated = false;
 	bool     m_bAreFroxelFogCreated = false;
-	bool     m_bIsTableDirty      = false;
-	uint32_t m_cpuVersion         = 1u;
-	uint32_t m_gpuVersion         = 0u;
+	bool     m_bIsTableDirty = false;
+	uint32_t m_cpuVersion = 1u;
+	uint32_t m_gpuVersion = 0u;
 
 	struct CachedCSMAtlasInfo
 	{
@@ -203,13 +225,15 @@ private:
 		size_t operator()(const ImageViewSamplerKey& k) const noexcept
 		{
 			return std::hash<uintptr_t>()(reinterpret_cast<uintptr_t>(k.first))
-				 ^ (std::hash<uintptr_t>()(reinterpret_cast<uintptr_t>(k.second)) << 1);
+				^ (std::hash<uintptr_t>()(reinterpret_cast<uintptr_t>(k.second)) << 1);
 		}
 	};
 	struct EqualPair
 	{
 		bool operator()(const ImageViewSamplerKey& a, const ImageViewSamplerKey& b) const noexcept
-		{ return a.first == b.first && a.second == b.second; }
+		{
+			return a.first == b.first && a.second == b.second;
+		}
 	};
 
 	std::mutex m_combinedMutex;
@@ -221,8 +245,16 @@ private:
 	std::vector<VkDescriptorImageInfo>                                         m_samplerCubeViews;
 	std::unordered_map<ImageViewSamplerKey, uint32_t, HashPair, EqualPair>     m_samplerCubeViewHashToID;
 
-	uint32_t m_shadowMapCombinedEnd     = 0u;
+	uint32_t m_renderTargetCombinedBegin = 0u;
+	uint32_t m_renderTargetCombinedEnd = 0u;
 	uint32_t m_staticTextureCombinedEnd = 0u;
+	std::array<uint32_t, RD::RENDER_TARGET_COUNT> m_renderTargetCombinedIDs = []
+		{
+			std::array<uint32_t, RD::RENDER_TARGET_COUNT> ids{};
+			ids.fill(UINT32_MAX);
+			return ids;
+		}();
+	bool m_bRenderTargetsRegistered = false;
 };
 
 namespace TemporalHistory
@@ -263,16 +295,6 @@ namespace TemporalHistory
 					 RD::Renderer_RenderTarget::GIHistoryB };
 	}
 
-	inline Slots GetVolLightHistorySlots(uint64_t frameIndex)
-	{
-		const bool odd = (frameIndex & 1ull) != 0ull;
-		return odd
-			? Slots{ RD::Renderer_RenderTarget::VolLightHistoryB,
-					 RD::Renderer_RenderTarget::VolLightHistoryA }
-			: Slots{ RD::Renderer_RenderTarget::VolLightHistoryA,
-					 RD::Renderer_RenderTarget::VolLightHistoryB };
-	}
-
 	inline Slots GetFroxelScatterSlots(uint64_t frameIndex)
 	{
 		const bool odd = (frameIndex & 1ull) != 0ull;
@@ -291,5 +313,15 @@ namespace TemporalHistory
 					 RD::Renderer_RenderTarget::ShadingLowA }
 			: Slots{ RD::Renderer_RenderTarget::ShadingLowA,
 					 RD::Renderer_RenderTarget::ShadingLowB };
+	}
+
+	inline Slots GetAOHistorySlots(uint64_t frameIndex)
+	{
+		const bool odd = (frameIndex & 1ull) != 0ull;
+		return odd
+			? Slots{ RD::Renderer_RenderTarget::AOHistoryB,
+					 RD::Renderer_RenderTarget::AOHistoryA }
+			: Slots{ RD::Renderer_RenderTarget::AOHistoryA,
+					 RD::Renderer_RenderTarget::AOHistoryB };
 	}
 }

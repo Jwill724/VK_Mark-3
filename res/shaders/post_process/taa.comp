@@ -1,4 +1,4 @@
-#version 450
+#version 460
 #extension GL_GOOGLE_include_directive : require
 #extension GL_ARB_separate_shader_objects : require
 
@@ -16,6 +16,8 @@ const float TAA_SHADING_MIN_FRAMES  = 1.0;
 const float TAA_SHADING_EPS         = 0.02;
 const float TAA_SHADING_BIAS        = 0.015;
 const float TAA_SHADING_BIAS_VIS    = 0.06;
+const float TAA_SHADING_MIN_COVER   = 0.1;
+const float TAA_SHADING_DOWNSCALE   = 8.0;
 const float TAA_VIS_SCALE_RATIO     = 0.5;
 const float TAA_FLOOR_DARK          = 0.05;
 const float TAA_SPATIAL_FRAMES      = 8.0;
@@ -168,30 +170,41 @@ float depthRejection(vec2 historyUV, vec2 currViewRange, float linMult, float li
 	return saturate((gap / tolerance - 1.0) * pc.depthRejectScale);
 }
 
-float deltaOutsideBox(float curr, vec4 g)
+float shadingRejection(vec2 uv, vec2 historyUV, vec2 uvScale, float histScale)
 {
-	float mn = min(min(g.x, g.y), min(g.z, g.w));
-	float mx = max(max(g.x, g.y), max(g.z, g.w));
-	return max(max(mn - curr, curr - mx), 0.0);
-}
+	vec3 sc = texture(inShadingCurrent, uv * uvScale).rgb;
+	if (sc.b < TAA_SHADING_MIN_COVER) return 0.0;
 
-float shadingRejection(vec2 uv, vec2 historyUV, float exposure)
-{
-	vec2 sc = texture(inShadingCurrent, uv).rg;
+	vec2 curr = sc.rg / sc.b;
 
-	vec4 gLuma = textureGather(inShadingHistory, historyUV, 0) * exposure;
-	vec4 gVis  = textureGather(inShadingHistory, historyUV, 1);
+	vec2 hUV = historyUV * uvScale;
+	vec4 gL  = textureGather(inShadingHistory, hUV, 0) * histScale;
+	vec4 gV  = textureGather(inShadingHistory, hUV, 1);
+	vec4 gC  = textureGather(inShadingHistory, hUV, 2);
 
-	float lc = sc.r * exposure;
+	vec2  lo      = vec2( 1e30);
+	vec2  hi      = vec2(-1e30);
+	float lumaSum = 0.0;
+	float count   = 0.0;
 
-	float lumaOut = deltaOutsideBox(lc, gLuma);
-	float lumaRef = 0.25 * (gLuma.x + gLuma.y + gLuma.z + gLuma.w);
+	for (int i = 0; i < 4; ++i)
+	{
+		if (gC[i] < TAA_SHADING_MIN_COVER) continue;
 
-	float lumaDelta = lumaOut / (lc + lumaRef + TAA_SHADING_EPS);
-	float visDelta  = deltaOutsideBox(sc.g, gVis);
+		vec2 h = vec2(gL[i], gV[i]) / gC[i];
+		lo = min(lo, h);
+		hi = max(hi, h);
+		lumaSum += h.x;
+		count   += 1.0;
+	}
 
+	if (count == 0.0) return 0.0;
+
+	vec2 outside = max(max(lo - curr, curr - hi), vec2(0.0));
+
+	float lumaDelta  = outside.x / (curr.x + lumaSum / count + TAA_SHADING_EPS);
 	float lumaReject = saturate((lumaDelta - TAA_SHADING_BIAS)     * pc.shadingRejectScale);
-	float visReject  = saturate((visDelta  - TAA_SHADING_BIAS_VIS) * pc.shadingRejectScale * TAA_VIS_SCALE_RATIO);
+	float visReject  = saturate((outside.y - TAA_SHADING_BIAS_VIS) * pc.shadingRejectScale * TAA_VIS_SCALE_RATIO);
 
 	return max(lumaReject, visReject);
 }
@@ -203,10 +216,13 @@ void main()
 	const ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 	const ivec2 res   = ivec2(scene.renderExtentSize.xy);
 
-	const vec2  invRes   = scene.renderPixelSizes.xy;
-	const vec2  outRes   = vec2(res);
-	const vec2  uv       = (vec2(pixel) + 0.5) * invRes;
-	const float exposure = max(getLuminanceBuffer().luminanceSums[0].x, 1e-4);
+	const vec2  invRes       = scene.renderPixelSizes.xy;
+	const vec2  outRes       = vec2(res);
+	const vec2  uv           = (vec2(pixel) + 0.5) * invRes;
+	const float histScale    = getPreExposureDelta();
+	const bool  historyValid = scene.temporal.y != 0u;
+
+	const vec2 shadingUVScale = outRes / (vec2(textureSize(inShadingCurrent, 0)) * TAA_SHADING_DOWNSCALE);
 
 	const float linMult = scene.depthLinearizeMult;
 	const float linAdd  = scene.depthLinearizeAdd;
@@ -224,7 +240,7 @@ void main()
 
 		vec4 c = texelFetch(inColorCurrent, src, 0);
 
-		sColor[i] = vec4(toWorkingSpace(sanitize(c.rgb) * exposure), c.a);
+		sColor[i] = vec4(toWorkingSpace(sanitize(c.rgb)), c.a);
 		sViewZ[i] = screenToViewDepth(texelFetch(inDepth, src, 0).r, linMult, linAdd);
 	}
 
@@ -271,7 +287,7 @@ void main()
 	vec2  historyUV = uv - velocity;
 	float motion    = saturate(length(velocity * outRes) * pc.invDeltaTime * pc.motionSpeedScale);
 
-	// 2. moments and tight filter — always needed
+	// 2. moments and tight filter
 	vec3  m1 = vec3(0.0);
 	vec3  m2 = vec3(0.0);
 	vec3  tight  = vec3(0.0);
@@ -293,32 +309,31 @@ void main()
 	vec3 mean  = m1 / 9.0;
 	vec3 sigma = sqrt(max(m2 / 9.0 - mean * mean, vec3(0.0)));
 
-	if (any(lessThan(historyUV, vec2(0.0))) || any(greaterThan(historyUV, vec2(1.0)))) {
-		vec3 rgb = fromWorkingSpace(mean) / exposure;
-		imageStore(outColorResolved, pixel,
-			vec4(min(rgb, vec3(COLOR_HISTORY_MAX)), 1.0 / TAA_MAX_HISTORY));
-		return;
-	}
-
-	// 3. history length
-	vec4  gathered = textureGather(inColorHistory, historyUV, 3);
-	float frames   = min(min(gathered.x, gathered.y), min(gathered.z, gathered.w)) * TAA_MAX_HISTORY;
-
-	// 4. reject stale history
-	float rejected      = max(motion, depthRejection(historyUV, vec2(viewZMin, viewZMax), linMult, linAdd));
-	float shadingReject = shadingRejection(uv, historyUV, exposure);
+	bool offscreen = any(lessThan(historyUV, vec2(0.0))) || any(greaterThan(historyUV, vec2(1.0)));
 
 	float targetFrames = clamp(
 		mix(TAA_HISTORY_SECONDS, TAA_HISTORY_SECONDS_OIT, trans.coverage) * pc.invDeltaTime,
 		TAA_MIN_FRAMES, TAA_MAX_HISTORY);
 
-	float reactive       = sColor[ci].a;
-	float reactiveFrames = mix(targetFrames, TAA_REACTIVE_FRAMES,    reactive);
-	float shadingFrames  = mix(targetFrames, TAA_SHADING_MIN_FRAMES, shadingReject);
+	// 3. history length and rejection
+	float frames = 0.0;
 
-	frames = min(frames, min(reactiveFrames, shadingFrames)) * (1.0 - rejected);
+	if (historyValid && !offscreen)
+	{
+		vec4 gathered = textureGather(inColorHistory, historyUV, 3);
+		frames = min(min(gathered.x, gathered.y), min(gathered.z, gathered.w)) * TAA_MAX_HISTORY;
 
-	// 5. spatial fallback only where confidence is low
+		float rejected      = max(motion, depthRejection(historyUV, vec2(viewZMin, viewZMax), linMult, linAdd));
+		float shadingReject = shadingRejection(uv, historyUV, shadingUVScale, histScale);
+
+		float reactive       = sColor[ci].a;
+		float reactiveFrames = mix(targetFrames, TAA_REACTIVE_FRAMES,    reactive);
+		float shadingFrames  = mix(targetFrames, TAA_SHADING_MIN_FRAMES, shadingReject);
+
+		frames = min(frames, min(reactiveFrames, shadingFrames)) * (1.0 - rejected);
+	}
+
+	// 4. spatial fallback only where confidence is low
 	vec3  current = tight / max(tightW, 1e-5);
 	float spatial = 1.0 - saturate(frames / TAA_SPATIAL_FRAMES);
 
@@ -343,26 +358,26 @@ void main()
 		current = mix(current, wide / max(wideW, 1e-5), spatial);
 	}
 
-	// 6. constrain
+	// 5. constrain
 	float trust = frames / targetFrames;
 
 	float t        = clamp(mean.x, 0.0, 1.0);
 	vec3  boxFloor = vec3(pc.sigmaFloor * max(t * (1.0 - t), TAA_FLOOR_DARK));
 	vec3  extent   = max(sigma * mix(TAA_CLAMP_FRESH, pc.clampGamma, trust), boxFloor);
 
-	// 7. blend
+	// 6. blend
 	vec3  history   = mean;
 	float overshoot = 0.0;
 
 	if (frames > 0.0)
 	{
-		vec3 historyRaw = toWorkingSpace(sanitize(sampleHistory(historyUV, outRes)) * exposure);
+		vec3 historyRaw = toWorkingSpace(sanitize(sampleHistory(historyUV, outRes)) * histScale);
 		history = clipToBox(mean, extent, historyRaw, overshoot);
 	}
 
 	float blend = max(1.0 / (frames + 1.0), saturate((overshoot - 1.0) * pc.shadingResponse));
 
-	vec3 resolved = fromWorkingSpace(mix(history, current, blend)) / exposure;
+	vec3 resolved = fromWorkingSpace(mix(history, current, blend));
 
 	imageStore(outColorResolved, pixel,
 		vec4(min(resolved, vec3(COLOR_HISTORY_MAX)), min(frames + 1.0, targetFrames) / TAA_MAX_HISTORY));

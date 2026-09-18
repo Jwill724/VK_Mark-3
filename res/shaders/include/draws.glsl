@@ -20,7 +20,6 @@ const uint DRAW_MAX_FLASHLIGHT    = 1024u;
 const uint DRAW_MAX_CSM0          = 8192u;
 const uint DRAW_MAX_CSM1          = 2048u;
 const uint DRAW_MAX_CSM2          = 2048u;
-const uint DRAW_MAX_CSM3          = 2048u;
 const uint DRAW_MAX_VOLUMETRIC    = 8192u;
 
 const uint DRAW_OFFSET_OPAQUE        = 0u;
@@ -30,8 +29,7 @@ const uint DRAW_OFFSET_FLASHLIGHT    = DRAW_OFFSET_TRANSPARENT    + DRAW_MAX_TRA
 const uint DRAW_OFFSET_CSM0          = DRAW_OFFSET_FLASHLIGHT     + DRAW_MAX_FLASHLIGHT;
 const uint DRAW_OFFSET_CSM1          = DRAW_OFFSET_CSM0           + DRAW_MAX_CSM0;
 const uint DRAW_OFFSET_CSM2          = DRAW_OFFSET_CSM1           + DRAW_MAX_CSM1;
-const uint DRAW_OFFSET_CSM3          = DRAW_OFFSET_CSM2           + DRAW_MAX_CSM2;
-const uint DRAW_OFFSET_VOLUMETRIC    = DRAW_OFFSET_CSM3           + DRAW_MAX_CSM3;
+const uint DRAW_OFFSET_VOLUMETRIC    = DRAW_OFFSET_CSM2           + DRAW_MAX_CSM2;
 
 const uint DEBUG_MASK_OBB          = 1u << 0;
 const uint DEBUG_MASK_SPHERE       = 1u << 1;
@@ -49,7 +47,6 @@ const uint TASK_MAX_FLASHLIGHT    = DRAW_MAX_FLASHLIGHT;
 const uint TASK_MAX_CSM0          = DRAW_MAX_CSM0;
 const uint TASK_MAX_CSM1          = DRAW_MAX_CSM1;
 const uint TASK_MAX_CSM2          = DRAW_MAX_CSM2;
-const uint TASK_MAX_CSM3          = DRAW_MAX_CSM3;
 const uint TASK_MAX_VOLUMETRIC    = DRAW_MAX_VOLUMETRIC;
 
 const uint TASK_OFFSET_OPAQUE        = 0u;
@@ -59,8 +56,7 @@ const uint TASK_OFFSET_FLASHLIGHT    = TASK_OFFSET_TRANSPARENT   + TASK_MAX_TRAN
 const uint TASK_OFFSET_CSM0          = TASK_OFFSET_FLASHLIGHT    + TASK_MAX_FLASHLIGHT;
 const uint TASK_OFFSET_CSM1          = TASK_OFFSET_CSM0          + TASK_MAX_CSM0;
 const uint TASK_OFFSET_CSM2          = TASK_OFFSET_CSM1          + TASK_MAX_CSM1;
-const uint TASK_OFFSET_CSM3          = TASK_OFFSET_CSM2          + TASK_MAX_CSM2;
-const uint TASK_OFFSET_VOLUMETRIC    = TASK_OFFSET_CSM3          + TASK_MAX_CSM3;
+const uint TASK_OFFSET_VOLUMETRIC    = TASK_OFFSET_CSM2          + TASK_MAX_CSM2;
 
 // task dispatch region base per stream — same shape as streamDrawBase
 uint streamTaskBase(uint slot)
@@ -74,7 +70,6 @@ uint streamTaskBase(uint slot)
 		case VIS_SLOT_CSM0:          return TASK_OFFSET_CSM0;
 		case VIS_SLOT_CSM1:          return TASK_OFFSET_CSM1;
 		case VIS_SLOT_CSM2:          return TASK_OFFSET_CSM2;
-		case VIS_SLOT_CSM3:          return TASK_OFFSET_CSM3;
 		case VIS_SLOT_VOLUMETRIC:    return TASK_OFFSET_VOLUMETRIC;
 		default:                     return TASK_OFFSET_OPAQUE;
 	}
@@ -91,7 +86,6 @@ uint maxTaskDispatches(uint slot)
 		case VIS_SLOT_CSM0:          return TASK_MAX_CSM0;
 		case VIS_SLOT_CSM1:          return TASK_MAX_CSM1;
 		case VIS_SLOT_CSM2:          return TASK_MAX_CSM2;
-		case VIS_SLOT_CSM3:          return TASK_MAX_CSM3;
 		case VIS_SLOT_VOLUMETRIC:    return TASK_MAX_VOLUMETRIC;
 		default:                     return 0u;
 	}
@@ -126,7 +120,6 @@ uint streamDrawBase(uint slot)
 		case VIS_SLOT_CSM0:          return DRAW_OFFSET_CSM0;
 		case VIS_SLOT_CSM1:          return DRAW_OFFSET_CSM1;
 		case VIS_SLOT_CSM2:          return DRAW_OFFSET_CSM2;
-		case VIS_SLOT_CSM3:          return DRAW_OFFSET_CSM3;
 		case VIS_SLOT_VOLUMETRIC:    return DRAW_OFFSET_VOLUMETRIC;
 		default:                     return DRAW_OFFSET_OPAQUE;
 	}
@@ -143,7 +136,6 @@ uint maxDrawsForSlot(uint slot)
 		case VIS_SLOT_CSM0:          return DRAW_MAX_CSM0;
 		case VIS_SLOT_CSM1:          return DRAW_MAX_CSM1;
 		case VIS_SLOT_CSM2:          return DRAW_MAX_CSM2;
-		case VIS_SLOT_CSM3:          return DRAW_MAX_CSM3;
 		case VIS_SLOT_VOLUMETRIC:    return DRAW_MAX_VOLUMETRIC;
 		default:                     return 0u;
 	}

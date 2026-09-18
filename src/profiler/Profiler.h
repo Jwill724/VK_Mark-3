@@ -5,6 +5,8 @@
 #include "renderer/RendererDefinitions.h"
 #include "renderer/frame/FrameResources.h"
 #include "renderer/rendergraph/RenderGraphSchedule.h"
+#include "renderer/scene/AtmosphereTypes.h"
+#include "renderer/scene/WorldProbeTypes.h"
 
 #include <array>
 #include <mutex>
@@ -19,6 +21,7 @@
 namespace RD = RendererDefinitions;
 
 class FrameContext;
+class Device;
 
 class Profiler
 {
@@ -57,6 +60,8 @@ public:
 
 		bool              m_bTimestampWritten = false;
 
+		bool              m_bLabelBegun = false;
+
 		uint32_t          m_threadSlot = 0u;
 		PassQueue         m_queue      = PassQueue::Graphics;
 	};
@@ -92,6 +97,8 @@ public:
 	{
 		return m_passStats[static_cast<size_t>(trackingID)].activeThisFrame;
 	}
+
+	void SetDevice(const Device* device) noexcept { m_device = device; }
 
 	void InitTracyGraphics(
 		VkPhysicalDevice physicalDevice,
@@ -139,6 +146,7 @@ public:
 
 	glm::vec3  cameraPos{};
 	std::mutex camMutex;
+	bool enableShaderEditor = false;
 	bool enableWireframeView = false;
 	bool enableAsyncCompute = true;
 	bool enableSharpening = true;
@@ -148,22 +156,26 @@ public:
 	TotalAssetDataCounts assetCounts;
 	RD::RenderToggles   debugToggles;
 
+	// TODO: Should generalize this better.
 	SSGIPush            ssgiSettings{};
 	TAAPush             taaSettings{};
-	VolumetricPush      volLightSettings{};
+	FroxelPush          froxelSettings{};
+	CompositePush       compositePush{};
 	LensFlarePush       lensFlareSettings{};
 	SSSPush             contactShadowsSettings{};
-	ToneMappingSettings toneMappingSettings{};
 	LumaExposurePush    lumaExposureSettings{};
 	BloomPush           bloomPush{};
+	ChromaticAberrationPush caPush{};
 	ForwardPush         forwardPush{};
-	SkyboxPush          skyboxPush{};
 	BindlessAccessPush  smaaTexturesIds{};
 	ReflectPush         reflectPush{};
 	NRDPush             nrdReflectPush{};
 	NRDPush             nrdShadowPush{};
 	RTShadowPush        rtShadowPush{};
 	CASPush             casSettings{};
+	AtmosphereSettings  atmosphereSettings{};
+	AtmosphereSkySettings atmosphereSkySettings{};
+	WorldProbeSettings worldProbeSettings{};
 
 	GPUStats            gpuStats;
 
@@ -202,6 +214,8 @@ private:
 
 	void*              m_tracyGraphicsContext = nullptr;
 	std::vector<void*> m_tracyComputeContexts;
+
+	const Device* m_device = nullptr;
 
 	FrameStats m_stats{};
 };

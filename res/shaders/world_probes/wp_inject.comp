@@ -1,0 +1,120 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_ray_query : require
+
+#include "../include/world_probe.glsl"
+#include "../include/world_probe_rt.glsl"
+#include "../include/depth.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(push_constant, scalar) uniform WPPush
+{
+	uvec4 update;
+} pc;
+
+shared vec4 samples[64];
+shared vec4 normals[64];
+
+void main()
+{
+	uint id;
+	if (!wpScheduledProbe(pc.update.x, gl_WorkGroupID.x, id)) return;
+
+	WorldProbeBuffer b = getWorldProbeBuffer();
+	WPHeader h = b.header;
+	if (b.probes[id].state.x == 0u || pc.update.z == 0u) return;
+
+	uint lane = gl_LocalInvocationIndex;
+	SceneData scene = getSceneData();
+	vec3 p = b.probes[id].position.xyz;
+	float radius = h.gather.x;
+	float bias = h.cascades[id / WP_PER_CASCADE].trace.w;
+	vec2 lo = vec2(1.0);
+	vec2 hi = vec2(0.0);
+	bool behind = false;
+
+	for (uint k = 0u; k < 8u; ++k)
+	{
+		vec3 o = vec3(k & 1u, (k >> 1u) & 1u, (k >> 2u) & 1u) * 2.0 - 1.0;
+		vec4 clip = scene.viewProj * vec4(p + o * radius, 1.0);
+		if (clip.w <= 0.0)
+		{
+			behind = true;
+			continue;
+		}
+		vec2 uv = GetPrevUV(clip);
+		lo = min(lo, uv);
+		hi = max(hi, uv);
+	}
+
+	if (behind)
+	{
+		lo = vec2(0.0);
+		hi = vec2(1.0);
+	}
+	lo = clamp(lo, 0.0, 1.0);
+	hi = clamp(hi, 0.0, 1.0);
+	samples[lane] = vec4(0.0);
+	normals[lane] = vec4(0.0);
+
+	if (all(greaterThan(hi, lo)) && scene.temporal.y == 1u)
+	{
+		uint seed = id * 1013904223u + h.revisions.x * 1664525u + lane * 37u;
+		vec2 u = (vec2(lane % 8u, lane / 8u) +
+			vec2(wpRandom(seed), wpRandom(seed + 1u))) / 8.0;
+
+		ivec2 he = SampleTextureSize(scene.renderTargetIDs.indirectSSGIID, 0);
+		ivec2 hp = clamp(ivec2(mix(lo, hi, u) * vec2(he)), ivec2(0), he - 1);
+		ivec2 fullExtent = SampleTextureSize(scene.renderTargetIDs.depthResolvedID, 0);
+		ivec2 phase = aoQuadPhase(scene.temporal.x, IsTAAEnabled());
+		ivec2 fp = min(hp * 2 + phase, fullExtent - 1);
+
+		float raw = SampleTextureFetch(scene.renderTargetIDs.depthResolvedID, fp, 0).r;
+		vec4 gi = SampleTextureFetch(scene.renderTargetIDs.indirectSSGIID, hp, 0);
+
+		if (raw > 0.0 && gi.a >= h.blend.w)
+		{
+			vec2 uv = (vec2(fp) + 0.5) / vec2(fullExtent);
+			vec3 x = reconstructWorldPosFromDepth(uv, raw, scene.invProj, scene.invView).pos;
+			vec3 n = normalize(mat3(scene.invView) *
+				octDecode(SampleTextureFetch(scene.renderTargetIDs.viewNormalsID, fp, 0).rg * 2.0 - 1.0));
+			float dist = length(x - p);
+
+			if (dist < radius && dot(n, p - x) > bias)
+			{
+				vec3 delta = x + n * bias - p;
+				float segment = length(delta);
+				WPHit hit = wpTrace(p, delta / max(segment, 1e-8),
+					bias, max(segment - bias, 0.0));
+				if (!hit.hit)
+				{
+					float w = pow(max(1.0 - dist / radius, 0.0), 2.0) * gi.a;
+					samples[lane] = vec4(
+						max(gi.rgb / max(getPreExposure(), 1e-8), vec3(0.0)), w);
+					normals[lane] = vec4(n, 1.0);
+				}
+			}
+		}
+	}
+
+	barrier();
+	if (lane >= 6u) return;
+
+	vec3 sum = vec3(0.0);
+	float weight = 0.0;
+	for (uint i = 0u; i < 64u; ++i)
+	{
+		float w = samples[i].a * wpNormalWeight(normals[i].xyz, lane);
+		sum += samples[i].rgb * w;
+		weight += w;
+	}
+	if (weight <= 1e-6) return;
+
+	vec4 prev = b.probes[id].bounce[lane];
+	float confidence = min(weight / 2.0, 1.0);
+	float rate = prev.a < 0.01 ? 1.0 : h.blend.y;
+	b.probes[id].bounce[lane] = vec4(
+		mix(prev.rgb, sum / weight, rate),
+		mix(prev.a, 1.0, rate * confidence));
+}

@@ -1,22 +1,19 @@
-#version 450
+#version 460
 
 #extension GL_ARB_separate_shader_objects : require
 #extension GL_GOOGLE_include_directive : require
 
 #include "../include/common.glsl"
 
-// Based on implementation
-// https://github.com/PanosK92/SpartanEngine/blob/master/data/shaders/bloom.hlsl
-
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = PUSH_SET, binding = PUSH_BINDING_READ_1) uniform sampler2D u_src;
 layout(set = PUSH_SET, binding = PUSH_BINDING_READ_2) uniform sampler2D u_depth;
-layout(set = PUSH_SET, binding = PUSH_BINDING_READ_3) uniform sampler2D u_emissive;
 layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1) writeonly uniform image2D u_dst;
 
 #define BLOOM_FIRST_DOWNSAMPLE_BIT 1u
-#define BLOOM_EMISSIVE_BIT         2u
+
+const float BLOOM_FIREFLY_LUMA = 8.0;
 
 layout(push_constant) uniform BloomPush
 {
@@ -26,8 +23,24 @@ layout(push_constant) uniform BloomPush
 	uint  flags;
 	float bloomThreshold;
 	float bloomKnee;
-	float emissiveBoost;   // 0 = off
 } pc;
+
+vec3 Sanitize(vec3 c)
+{
+	c = mix(c, vec3(0.0), isnan(c));
+	return clamp(c, vec3(0.0), vec3(RESOLVE_TARGET_MAX));
+}
+
+vec3 ClampLuma(vec3 c, float maxLuma)
+{
+	float l = luminance(c);
+	return c * min(1.0, maxLuma / max(l, EXPOSURE_MIN));
+}
+
+vec3 Tap(vec2 uv, float maxLuma)
+{
+	return ClampLuma(Sanitize(textureLod(u_src, uv, 0.0).rgb), maxLuma);
+}
 
 vec3 KarisAverage(vec3 c0, vec3 c1, vec3 c2, vec3 c3)
 {
@@ -38,20 +51,19 @@ vec3 KarisAverage(vec3 c0, vec3 c1, vec3 c2, vec3 c3)
 	return (c0 * w0 + c1 * w1 + c2 * w2 + c3 * w3) / max(w0 + w1 + w2 + w3, 1e-5);
 }
 
-vec3 SampleEmissive(vec2 uv, vec2 t)
+float GeometryCoverage(vec2 uv, vec2 t)
 {
-	vec3 e0 = textureLod(u_emissive, uv + vec2(-t.x,  t.y), 0.0).rgb;
-	vec3 e1 = textureLod(u_emissive, uv + vec2( t.x,  t.y), 0.0).rgb;
-	vec3 e2 = textureLod(u_emissive, uv + vec2(-t.x, -t.y), 0.0).rgb;
-	vec3 e3 = textureLod(u_emissive, uv + vec2( t.x, -t.y), 0.0).rgb;
-	return KarisAverage(e0, e1, e2, e3);
-}
+	vec4 d0 = textureGather(u_depth, uv + vec2(-t.x, -t.y), 0);
+	vec4 d1 = textureGather(u_depth, uv + vec2( t.x, -t.y), 0);
+	vec4 d2 = textureGather(u_depth, uv + vec2(-t.x,  t.y), 0);
+	vec4 d3 = textureGather(u_depth, uv + vec2( t.x,  t.y), 0);
 
-float SkyMask(vec2 uv)
-{
-	float depth = textureLod(u_depth, uv, 0.0).r;
-	// far plane == 0; fade in just off the plane to soften the horizon seam
-	return smoothstep(0.0, 1e-4, depth);
+	vec4 hits = step(vec4(1e-7), d0)
+			  + step(vec4(1e-7), d1)
+			  + step(vec4(1e-7), d2)
+			  + step(vec4(1e-7), d3);
+
+	return dot(hits, vec4(1.0)) * (1.0 / 16.0);
 }
 
 void main()
@@ -59,33 +71,34 @@ void main()
 	ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
 	if (coord.x >= int(pc.dstRes.x) || coord.y >= int(pc.dstRes.y)) return;
 
+	SceneData scene = getSceneData();
+
 	vec2 uv = (vec2(coord) + 0.5) / vec2(pc.dstRes);
 	vec2 t  = pc.srcTexelSize;
 
-	// 13 bilinear taps
-	vec3 a = textureLod(u_src, uv + vec2(-2.0 * t.x,  2.0 * t.y), 0.0).rgb;
-	vec3 b = textureLod(u_src, uv + vec2( 0.0,        2.0 * t.y), 0.0).rgb;
-	vec3 c = textureLod(u_src, uv + vec2( 2.0 * t.x,  2.0 * t.y), 0.0).rgb;
+	bool  first   = (pc.flags & BLOOM_FIRST_DOWNSAMPLE_BIT) != 0u;
+	float maxLuma = first ? BLOOM_FIREFLY_LUMA : RESOLVE_TARGET_MAX;
 
-	vec3 d = textureLod(u_src, uv + vec2(-2.0 * t.x,  0.0), 0.0).rgb;
-	vec3 e = textureLod(u_src, uv + vec2( 0.0,        0.0), 0.0).rgb;
-	vec3 f = textureLod(u_src, uv + vec2( 2.0 * t.x,  0.0), 0.0).rgb;
+	vec3 a = Tap(uv + vec2(-2.0 * t.x,  2.0 * t.y), maxLuma);
+	vec3 b = Tap(uv + vec2( 0.0,        2.0 * t.y), maxLuma);
+	vec3 c = Tap(uv + vec2( 2.0 * t.x,  2.0 * t.y), maxLuma);
 
-	vec3 g = textureLod(u_src, uv + vec2(-2.0 * t.x, -2.0 * t.y), 0.0).rgb;
-	vec3 h = textureLod(u_src, uv + vec2( 0.0,       -2.0 * t.y), 0.0).rgb;
-	vec3 i = textureLod(u_src, uv + vec2( 2.0 * t.x, -2.0 * t.y), 0.0).rgb;
+	vec3 d = Tap(uv + vec2(-2.0 * t.x,  0.0), maxLuma);
+	vec3 e = Tap(uv + vec2( 0.0,        0.0), maxLuma);
+	vec3 f = Tap(uv + vec2( 2.0 * t.x,  0.0), maxLuma);
 
-	vec3 j = textureLod(u_src, uv + vec2(-t.x,      t.y), 0.0).rgb;
-	vec3 k = textureLod(u_src, uv + vec2( t.x,      t.y), 0.0).rgb;
-	vec3 l = textureLod(u_src, uv + vec2(-t.x,     -t.y), 0.0).rgb;
-	vec3 m = textureLod(u_src, uv + vec2( t.x,     -t.y), 0.0).rgb;
+	vec3 g = Tap(uv + vec2(-2.0 * t.x, -2.0 * t.y), maxLuma);
+	vec3 h = Tap(uv + vec2( 0.0,       -2.0 * t.y), maxLuma);
+	vec3 i = Tap(uv + vec2( 2.0 * t.x, -2.0 * t.y), maxLuma);
+
+	vec3 j = Tap(uv + vec2(-t.x,  t.y), maxLuma);
+	vec3 k = Tap(uv + vec2( t.x,  t.y), maxLuma);
+	vec3 l = Tap(uv + vec2(-t.x, -t.y), maxLuma);
+	vec3 m = Tap(uv + vec2( t.x, -t.y), maxLuma);
 
 	vec3 result;
-	if ((pc.flags & BLOOM_FIRST_DOWNSAMPLE_BIT) != 0u)
+	if (first)
 	{
-		float sky = SkyMask(uv);
-
-		// Per-box Karis (5 overlapping 2x2 boxes)
 		vec3 box0 = KarisAverage(a, b, d, e);
 		vec3 box1 = KarisAverage(b, c, e, f);
 		vec3 box2 = KarisAverage(d, e, g, h);
@@ -93,29 +106,20 @@ void main()
 		vec3 box4 = KarisAverage(j, k, l, m);
 		result = box4 * 0.5 + (box0 + box1 + box2 + box3) * 0.125;
 
-		result *= sky;
-
-		float exposure     = getLuminanceBuffer().luminanceSums[0].x;
-		float thresholdHdr = pc.bloomThreshold / exposure;
-		float kneeHdr      = pc.bloomKnee      / exposure;
 		float lum          = luminance(result);
-		float amount       = softThreshold(lum, thresholdHdr, kneeHdr);
-		result             = (amount > 0.0) ? result * (amount / max(lum, 1e-6)) : vec3(0.0);
+		float amount       = softThreshold(lum, pc.bloomThreshold, pc.bloomKnee);
+		result             = (amount > 0.0) ? result * (amount / max(lum, EXPOSURE_MIN)) : vec3(0.0);
 
-		if ((pc.flags & BLOOM_EMISSIVE_BIT) != 0u)
-		{
-			vec3 em = SampleEmissive(uv, t);
-			result += em * (pc.emissiveBoost * sky);
-		}
+		vec2 jitterUV = vec2(scene.temporalJitter.x, -scene.temporalJitter.y) * 0.5;
+		result *= GeometryCoverage(uv + jitterUV, t);
 	}
 	else
 	{
-		// Standard COD weights (sum = 1).
 		result  = e * 0.125;
 		result += (a + c + g + i) * 0.03125;
 		result += (b + d + f + h) * 0.0625;
 		result += (j + k + l + m) * 0.125;
 	}
 
-	imageStore(u_dst, coord, vec4(max(result, vec3(0.0)), 1.0));
+	imageStore(u_dst, coord, vec4(result, 1.0));
 }

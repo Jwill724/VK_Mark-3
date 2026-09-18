@@ -3,11 +3,11 @@
 
 #extension GL_GOOGLE_include_directive : require
 
+#include "world_probe.glsl"
 #include "rt_params.glsl"
 #include "pbr.glsl"
+#include "atmosphere_lighting.glsl"
 #include "lighting.glsl"
-
-const float SKY_MAX_LOD = 4.0;
 
 float rtMaxComp(vec3 v)
 {
@@ -16,7 +16,15 @@ float rtMaxComp(vec3 v)
 
 vec3 rtSampleSky(vec3 dir, float pathRough, uint skyboxID)
 {
-	return SampleCubeLod(skyboxID, vec3(dir.x, -dir.y, dir.z), pathRough * SKY_MAX_LOD).rgb;
+	vec3 sky = atmosphereSkyRadiance(dir);
+
+	float sunWeight =
+		1.0 - smoothstep(0.05, 0.25, pathRough);
+
+	vec3 sun =
+		atmosphereSunDiscRadiance(dir) * sunWeight;
+
+	return sky + sun;
 }
 
 vec3 rtShadeAnalytic(HitSurface s, vec3 rayDir, RTShadeParams p)
@@ -31,7 +39,7 @@ vec3 rtShadeAnalytic(HitSurface s, vec3 rayDir, RTShadeParams p)
 		s.albedo, s.metallic, s.roughness, s.mat, p.brdfID);
 
 	vec3 L        = p.shadow.sunDirectionWS.xyz;
-	vec3 sunColor = sd.sunlightColor.rgb * sd.sunlightColor.a;
+	vec3 sunColor = atmosphereSunAtWorld(s.position);
 
 	LightSample sun = evaluateDirectional(hs, L, sunColor);
 
@@ -39,16 +47,19 @@ vec3 rtShadeAnalytic(HitSurface s, vec3 rayDir, RTShadeParams p)
 
 	if (sun.NdotL > 0.0)
 	{
-		direct = sun.diffuse + sun.specular;
+		float bias = rtSurfaceBias(
+			p.shadow,
+			distance(sd.cameraPos.xyz, s.position));
 
-		if (rtMaxComp(direct) > rtMaxComp(sunColor) * p.shadowSkipThreshold)
-		{
-			float bias = rtSurfaceBias(p.shadow, distance(sd.cameraPos.xyz, s.position));
+		float sunVisibility = rtSunVisibleOpaque(
+			s.position + s.normal * bias,
+			L,
+			p.shadow.rayTMin,
+			p.shadow.rayTMax);
 
-			direct *= rtSunVisibleOpaque(
-				s.position + s.normal * bias, L,
-				p.shadow.rayTMin, p.shadow.rayTMax);
-		}
+		direct =
+			(sun.diffuse + sun.specular) *
+			sunVisibility;
 	}
 
 	vec3 local = vec3(0.0);
@@ -76,14 +87,61 @@ vec3 rtShadeAnalytic(HitSurface s, vec3 rayDir, RTShadeParams p)
 		}
 	}
 
-	uint envSet = min(debug.activeEnvMap, MAX_ENV_SETS - 1u);
-	vec3 irradiance = sampleIrradiance(s.normal, getSHIrradianceBuffer().shIrr[envSet].sh);
+	// Diffuse lighting at the reflected hit position.
+	WPLighting wpDiffuse = sampleWorldProbes(
+		s.position,
+		hs.N,
+		s.normal);
 
-	vec3 ambientDiffuse  = hs.kD * hs.diffuseAlbedo * (1.0 / PI) * irradiance;
-	vec3 ambientSpecular = sampleSpecIBL(hs.V, hs.N, hs.rough, hs.F0, hs.brdf, p.specularID)
-						 * hs.multiScatter;
+	vec3 irradiance = probeSkyIrradiance(wpDiffuse, hs.N);
+	vec3 bounce     = probeBounceLighting(wpDiffuse);
 
-	return direct + local + (ambientDiffuse + ambientSpecular) * p.ambientScale + s.emissive;
+	vec3 ambientDiffuse =
+		hs.kD *
+		hs.diffuseAlbedo *
+		(irradiance * (1.0 / PI) + bounce);
+
+	// Approximate sky visibility for the terminal specular lobe.
+	vec3 R = reflect(-hs.V, hs.N);
+
+	WPLighting wpSpecular = sampleWorldProbes(
+		s.position,
+		R,
+		s.normal);
+
+	float probeCoverage = wpSpecular.valid
+		? clamp(wpSpecular.coverage, 0.0, 1.0)
+		: 0.0;
+
+	float skyVis =
+		clamp(wpSpecular.skyVisibility, 0.0, 1.0) *
+		probeCoverage;
+
+	float horizon = clamp(
+		1.0 + dot(R, s.geoNormal),
+		0.0, 1.0);
+
+	skyVis *= horizon * horizon;
+
+	vec3 atmosphereSpecular = sampleAtmosphereSpecular(
+		hs.V,
+		hs.N,
+		hs.rough,
+		hs.F0,
+		hs.brdf);
+
+	const float RT_TERMINAL_SKY_SPECULAR_SCALE = 0.5;
+
+	vec3 ambientSpecular =
+		atmosphereSpecular *
+		hs.multiScatter *
+		skyVis *
+		RT_TERMINAL_SKY_SPECULAR_SCALE;
+
+	return direct
+		+ local
+		+ (ambientDiffuse + ambientSpecular) * p.ambientScale
+		+ s.emissive;
 }
 
 #endif

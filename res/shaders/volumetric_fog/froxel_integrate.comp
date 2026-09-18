@@ -1,0 +1,92 @@
+#version 460
+
+#extension GL_ARB_separate_shader_objects : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "../include/common.glsl"
+#include "../include/depth.glsl"
+#include "../include/froxel.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = PUSH_SET, binding = PUSH_BINDING_READ_1) uniform sampler3D inResolved;
+layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1) writeonly uniform image3D outIntegrated;
+
+layout(push_constant) uniform FroxelPush
+{
+	vec2  froxelClips;
+
+	float density;
+	float scatteringStrength;
+	float extinction;
+	float heightFalloff;
+
+	float asymmetryFactor;
+	float jitterStrength;
+	float historyWeight;
+	float localLightIntensity;
+} pc;
+
+float fogSegmentIntegral(float sigmaE, float segment)
+{
+	float tau = sigmaE * segment;
+
+	if (tau < 0.01)
+	{
+		// (1 - exp(-tau)) / tau, expanded near zero.
+		float factor =
+			1.0 - tau * 0.5
+			+ tau * tau * (1.0 / 6.0)
+			- tau * tau * tau * (1.0 / 24.0);
+
+		return segment * factor;
+	}
+
+	return (1.0 - exp(-tau)) / sigmaE;
+}
+
+void main()
+{
+	ivec2 cell = ivec2(gl_GlobalInvocationID.xy);
+	if (any(greaterThanEqual(cell, ivec2(FROXEL_X, FROXEL_Y)))) return;
+
+	SceneData scene = getSceneData();
+
+	vec2 uv = (vec2(cell) + 0.5) / vec2(FROXEL_X, FROXEL_Y);
+
+	vec3  viewRayVS = cheapReconstructViewPos(uv, 1.0, scene.ndcToViewMult, scene.ndcToViewAdd);
+	float rayLen    = length(mat3(scene.invView) * viewRayVS);
+
+	float nearZ = pc.froxelClips.x;
+	float farZ  = pc.froxelClips.y;
+
+	vec3  accum     = vec3(0.0);
+	float transmit  = 1.0;
+	float prevDepth = nearZ;
+
+	for (uint s = 0u; s < FROXEL_Z; ++s)
+	{
+		float nextDepth = froxelSliceToDepth(float(s + 1u), nearZ, farZ);
+		float segment   = (nextDepth - prevDepth) * rayLen;
+
+		vec4 sample0 = texelFetch(inResolved, ivec3(cell, int(s)), 0);
+
+		float sigmaE = max(sample0.a, 0.0);
+		float opticalDepth = sigmaE * segment;
+
+		float sliceTransmit = exp(-opticalDepth);
+
+		vec3 integrated = sample0.rgb
+			* fogSegmentIntegral(sigmaE, segment);
+
+		accum    += transmit * integrated;
+		transmit *= sliceTransmit;
+
+		imageStore(
+			outIntegrated,
+			ivec3(cell, int(s)),
+			vec4(accum, transmit));
+
+		prevDepth = nextDepth;
+	}
+}

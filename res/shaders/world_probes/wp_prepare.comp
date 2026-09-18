@@ -1,0 +1,163 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "../include/world_probe.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(push_constant, scalar) uniform WPPush
+{
+	uvec4 update;
+} pc;
+
+void wpAppend(uint queue, uint id)
+{
+	WorldProbeScheduleBuffer s = getWorldProbeScheduleBuffer();
+
+	uint slot = atomicAdd(s.counts[queue], 1u);
+
+	if (slot < WP_COUNT)
+	{
+		s.ids[queue * WP_COUNT + slot] = id;
+	}
+}
+
+void main()
+{
+	uint gid = gl_GlobalInvocationID.x;
+
+	WorldProbeBuffer b = getWorldProbeBuffer();
+	WorldProbeScheduleBuffer s = getWorldProbeScheduleBuffer();
+
+	if (pc.update.x == 0u)
+	{
+		if (gid == 0u)
+		{
+			b.header = getWorldProbeFrameInfo().header;
+		}
+
+		if (gid < 4u)
+		{
+			s.counts[gid] = 0u;
+		}
+
+		if (gid < 9u)
+		{
+			s.commands[gid] =
+				gid % 3u == 0u ?
+				0u : 1u;
+		}
+
+		return;
+	}
+
+	if (pc.update.x == 2u)
+	{
+		if (gid < 3u)
+		{
+			uint n = min(s.counts[gid], WP_COUNT);
+
+			s.counts[gid] = n;
+			s.commands[gid * 3u] = n;
+			s.commands[gid * 3u + 1u] = 1u;
+			s.commands[gid * 3u + 2u] = 1u;
+		}
+
+		return;
+	}
+
+	WPHeader h = b.header;
+
+	if (gid >= h.layoutInfo.y) return;
+
+	WPCascadeDesc c =
+		h.cascades[gid / WP_PER_CASCADE];
+
+	uint localId = gid % WP_PER_CASCADE;
+
+	ivec3 cell =
+		wpSlotCell(localId, c);
+
+	bool fresh =
+		pc.update.y != 0u ||
+		b.probes[gid].state.y != h.revisions.y ||
+		any(notEqual(b.probes[gid].cell.xyz, cell));
+
+	getWorldProbeSummaryBuffer().summaries[gid].counts.w = 0u;
+
+	if (fresh)
+	{
+		b.probes[gid].position =
+			vec4(
+				vec3(cell) * c.originSpacing.w,
+				0.0);
+
+		b.probes[gid].state =
+			uvec4(
+				0u,
+				h.revisions.y,
+				0u,
+				0u);
+
+		b.probes[gid].cell =
+			ivec4(
+				cell,
+				WP_FLAG_NEEDS_FULL_TRACE);
+
+		b.probes[gid].meta =
+			uvec4(
+				0xffffffffu,
+				0xffffffffu,
+				0u,
+				0u);
+
+		b.probes[gid].rayClassMask = uvec4(0u);
+
+		for (uint a = 0u; a < 6u; ++a)
+		{
+			b.probes[gid].sky[a] = vec4(0);
+			b.probes[gid].bounce[a] = vec4(0);
+		}
+
+		wpAppend(
+			WP_QUEUE_SCROLL_QUARTER,
+			gid);
+
+		return;
+	}
+
+	float decay =
+		exp2(
+			-h.gather.y /
+			max(h.blend.z, 0.01));
+
+	for (uint a = 0u; a < 6u; ++a)
+	{
+		b.probes[gid].bounce[a].a *= decay;
+	}
+
+	if (b.probes[gid].state.w != h.revisions.w)
+	{
+		b.probes[gid].cell.w |= WP_FLAG_NEEDS_FULL_TRACE;
+		b.probes[gid].meta.z = 0u;
+	}
+
+	if (wpRoundRobinContains(
+			localId,
+			c.schedule.x,
+			c.schedule.y))
+	{
+		wpAppend(
+			WP_QUEUE_FULL_TRACE,
+			gid);
+	}
+	else if (wpRoundRobinContains(
+			localId,
+			c.schedule.z,
+			c.schedule.w))
+	{
+		wpAppend(
+			WP_QUEUE_RELIGHT,
+			gid);
+	}
+}

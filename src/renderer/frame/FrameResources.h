@@ -8,51 +8,51 @@
 
 namespace RD = RendererDefinitions;
 
-inline constexpr uint32_t TIMESTAMP_PASS_COUNT       = static_cast<uint32_t>(RD::PASS_COUNT);
+inline constexpr uint32_t TIMESTAMP_PASS_COUNT = static_cast<uint32_t>(RD::PASS_COUNT);
 inline constexpr uint32_t PASS_TIMESTAMP_QUERY_COUNT = TIMESTAMP_PASS_COUNT * 2u;
-inline constexpr uint32_t FRAME_BEGIN_QUERY          = PASS_TIMESTAMP_QUERY_COUNT;
-inline constexpr uint32_t FRAME_END_QUERY            = PASS_TIMESTAMP_QUERY_COUNT + 1u;
-inline constexpr uint32_t TIMESTAMP_QUERY_COUNT      = PASS_TIMESTAMP_QUERY_COUNT + 2u;
+inline constexpr uint32_t FRAME_BEGIN_QUERY = PASS_TIMESTAMP_QUERY_COUNT;
+inline constexpr uint32_t FRAME_END_QUERY = PASS_TIMESTAMP_QUERY_COUNT + 1u;
+inline constexpr uint32_t TIMESTAMP_QUERY_COUNT = PASS_TIMESTAMP_QUERY_COUNT + 2u;
 
 namespace RD = RendererDefinitions;
 
 enum InstanceFlags : uint32_t
 {
-	PASS_OPAQUE      = 1 << 0,
+	PASS_OPAQUE = 1 << 0,
 	PASS_TRANSPARENT = 1 << 1,
-	STATIC_OBJECT    = 1 << 2,
-	DYNAMIC_OBJECT   = 1 << 3,
-	CAST_CSM         = 1 << 4,
-	CAST_FLASHLIGHT  = 1 << 5,
-	RECEIVE_SHADOW   = 1 << 6,
-	OCCLUDABLE       = 1 << 7,
-	LOD_ENABLED      = 1 << 8,
-	ALPHA_TESTED     = 1 << 9,
-	DOUBLE_SIDED     = 1 << 10,
-	GPU_SKINNED      = 1 << 11,
-	ALWAYS_VISIBLE   = 1 << 12,
-	IS_TREE          = 1 << 13,
-	HAS_NORMALS      = 1 << 14,
-	INSTANCE_ACTIVE  = 1 << 15,
-	RT_VISIBLE       = 1 << 16,
-	TRANSMISSIVE     = 1 << 17,
+	STATIC_OBJECT = 1 << 2,
+	DYNAMIC_OBJECT = 1 << 3,
+	CAST_CSM = 1 << 4,
+	CAST_FLASHLIGHT = 1 << 5,
+	RECEIVE_SHADOW = 1 << 6,
+	OCCLUDABLE = 1 << 7,
+	LOD_ENABLED = 1 << 8,
+	ALPHA_TESTED = 1 << 9,
+	DOUBLE_SIDED = 1 << 10,
+	GPU_SKINNED = 1 << 11,
+	ALWAYS_VISIBLE = 1 << 12,
+	IS_TREE = 1 << 13,
+	HAS_NORMALS = 1 << 14,
+	INSTANCE_ACTIVE = 1 << 15,
+	RT_VISIBLE = 1 << 16,
+	TRANSMISSIVE = 1 << 17,
 };
 
 struct InstanceInput
 {
-	uint32_t meshID       = UINT32_MAX;
-	uint32_t materialID   = UINT32_MAX;
-	uint32_t transformID  = UINT32_MAX;
+	uint32_t meshID = UINT32_MAX;
+	uint32_t materialID = UINT32_MAX;
+	uint32_t transformID = UINT32_MAX;
 	uint32_t meshletVisibilityOffset = 0u;
-	uint32_t lod0         = UINT32_MAX;
-	uint32_t lod1         = UINT32_MAX;
-	uint32_t lod2         = UINT32_MAX;
-	uint32_t lod3         = UINT32_MAX;
-	uint32_t shadowLod0   = UINT32_MAX;
-	uint32_t shadowLod1   = UINT32_MAX;
-	uint32_t shadowLod2   = UINT32_MAX;
-	uint32_t rtMeshID     = UINT32_MAX;
-	uint32_t flags        = UINT32_MAX;
+	uint32_t lod0 = UINT32_MAX;
+	uint32_t lod1 = UINT32_MAX;
+	uint32_t lod2 = UINT32_MAX;
+	uint32_t lod3 = UINT32_MAX;
+	uint32_t shadowLod0 = UINT32_MAX;
+	uint32_t shadowLod1 = UINT32_MAX;
+	uint32_t shadowLod2 = UINT32_MAX;
+	uint32_t rtMeshID = UINT32_MAX;
+	uint32_t flags = UINT32_MAX;
 };
 
 struct DrawBin
@@ -81,10 +81,6 @@ struct GPUStats
 	uint32_t visibleTransparent = 0;
 	uint32_t visibleShadowCasters = 0;
 
-	//uint32_t opaqueDrawCount = 0;
-	//uint32_t transparentDrawCount = 0;
-	//uint32_t shadowDrawCount = 0;
-
 	uint32_t triangleCount = 0;  // Doesnt count shadows
 
 	// --- mesh shader path ---
@@ -109,7 +105,6 @@ struct CoreSlab
 struct InstanceState
 {
 	std::vector<InstanceInput> gpuInputs; // per mesh X copy
-	//std::vector<AABB> worldAABBs;        // parallel to coreStatic
 	std::unordered_map<ModelID, CoreSlab> slabs;
 	std::vector<uint32_t> active;    // live rows (indices into coreStatic)
 	std::vector<uint32_t> rtRows;
@@ -119,7 +114,6 @@ struct InstanceState
 		gpuInputs.clear();
 		active.clear();
 		rtRows.clear();
-		//worldAABBs.clear();
 		slabs.clear();
 		rtInstanceCount = 0;
 	}
@@ -143,6 +137,7 @@ struct LocalLight
 	float sourceLength = 0.0f;
 
 	float changeRate = 0.0f;
+	float lumens = 0.0f;
 };
 
 struct Cmaa2BufferSizes
@@ -183,7 +178,7 @@ struct ClusterBufferSizes
 		uint32_t screenHeight,
 		uint32_t tileSizeX = RD::CLUSTERS_TILE_SLICE_X,
 		uint32_t tileSizeY = RD::CLUSTERS_TILE_SLICE_Y,
-		uint32_t zSlices   = RD::CLUSTERS_TILE_SLICE_Z);
+		uint32_t zSlices = RD::CLUSTERS_TILE_SLICE_Z);
 };
 
 struct RTRayListHeader
@@ -244,6 +239,7 @@ struct alignas(16) LightClustersData
 };
 
 // === RENDER PASS PUSH CONSTANTS ===
+// Layout only. Tunable values are assigned in Renderer::ApplyPushConstantDefaults().
 
 struct alignas(16) BindlessAccessPush
 {
@@ -258,146 +254,175 @@ struct alignas(16) ForwardPush
 	glm::vec2 halfTexel = glm::vec2(0.0f);
 	uint32_t specularID = UINT32_MAX;
 	uint32_t brdfID = UINT32_MAX;
-	float oitDepthScale = 400.0f;
-	float bounceFeedback = 0.6f;
-	float giIntensity = 5.0f;
+
+	float oitDepthScale = 0.0f;
+	float bounceFeedback = 0.0f;
+	float giIntensity = 0.0f;
 	uint32_t flashlightShadowMapID = UINT32_MAX;
+
 	uint32_t flashlightCookieTexID = UINT32_MAX;
 	float reflectRoughFade = 0.0f;
 	float reflectRoughCutoff = 0.0f;
-
-	float pad0;
+	float pad0 = 0.0f;
 };
 
 struct alignas(16) SSGIPush
 {
-	float effectRadius = 10.0f;
-	float effectFalloffRange = 0.6f;
-
+	float effectRadius = 0.0f;
+	float effectFalloffRange = 0.0f;
 	glm::vec2 ndcToViewMul_x_PixelSize{ 0.0f };
 
-	float radiusMultiplier = 1.457;
-	float sampleDistributionPower = 2.0f;
-
-	// For temporal noise
-	uint32_t noiseIndex = 0u; // FrameIndex % 64u
+	float radiusMultiplier = 0.0f;
+	float sampleDistributionPower = 0.0f;
+	uint32_t noiseIndex = 0u;
 	uint32_t hilbertLutID = UINT32_MAX;
 
-	// Denoise
-	float denoiseBlurBeta = 1.0f;
+	float denoiseBlurBeta = 0.0f;
 	uint32_t isFinalPass = 0u;
+	float upsampleDepthSigma = 0.0f;
+	float giClampMax = 0.0f;
 
-	float upsampleDepthSigma = 256.0f;
+	float giReprojTolerance = 0.0f;
+	float giTemporalAlpha = 0.0f;
+	float giFallbackStrength = 0.0f;
+	uint32_t aoHistoryValid = 0u;
 
-	float giClampMax          = 8.0f;
-	float giReprojTolerance   = 0.1f;
-	float giTemporalAlpha     = 0.08f;
-	float giFallbackStrength  = 0.4f;
+	float aoHistoryWeight = 0.875f;
+	float aoDepthTolerance = 0.02f;
+	float aoNormalThreshold = 0.9f;
+	float aoMinObservation = 0.0f;
 
-	float pad0;
+	float aoNeighborConfidence = 0.0f;
+	float aoClipConfidence = 0.0f;
+	float aoMaxHistorySamples = 0.0f;
+	float aoInitialVariance = 0.0f;
+
+	float aoClipSigma = 0.0f;
+	float aoClipMaxSigma = 0.0f;
+	float aoClipMargin = 0.0f;
+	float aoReactiveThreshold = 0.0f;
+
+	float aoMissingHoldFrames = 0.0f;
+	float aoMissingMaxFrames = 0.0f;
+	float aoMissingAgeDecay = 0.0f;
+	float aoHistoryFootprintMinSupport = 0.0f;
 };
 
 struct alignas(16) TAAPush
 {
 	float invDeltaTime = 0.0f;
-	float clampGamma = 6.0f;
-	float depthRejectScale = 5.0f;
-	float motionSpeedScale = 0.0003f;
+	float clampGamma = 0.0f;
+	float depthRejectScale = 0.0f;
+	float motionSpeedScale = 0.0f;
 
-	float sigmaFloor = 0.02f;
-	float shadingResponse = 2.0;
-	float shadingRejectScale = 1.5f;
-	float pad0;
+	float sigmaFloor = 0.0f;
+	float shadingResponse = 0.0f;
+	float shadingRejectScale = 0.0f;
+	float pad0 = 0.0f;
 };
 
 struct alignas(16) CASPush
 {
-	float sharpness = 0.5f;
-	float denoise = 1.0f;
+	float sharpness = 0.0f;
+	float denoise = 0.0f;
 	float hdrCompress = 0.0f;
 	float pad0 = 0.0f;
 };
 
-struct alignas(16) VolumetricPush
+struct alignas(16) FroxelPush
 {
-	float density = 0.002f;
-	float scatteringStrength = 5.0f;
-	float extinction = 0.08f;
-	float heightFalloff = 0.06f;
+	glm::vec2 froxelClips{ 0.0f };
 
-	float maxDistance = 100.0f;
-	float jitterStrength = 0.9f;
-	float asymmetryFactor = 0.5f;
-	float minTransmittance = 0.9f;
+	float density = 0.0f;
+	float scatteringStrength = 0.0f;
+	float extinction = 0.0f;
+	float heightFalloff = 0.0f;
 
-	int beamPower = 4;
-	float blurRadius = 4.0f;
-	float blurDepthSigma = 0.5f;
-	float blurWeightSigma = 1.6f;
+	float asymmetryFactor = 0.0f;     // phase function asymmetry factor (g)
+	float jitterStrength = 0.0f;
+	float historyWeight = 0.0f;
+	float localLightIntensity = 0.0f;
 
-	glm::vec2 blurDirection{ 0.0f };
-	float historyWeight = 0.92f;
-	float clipGamma = 1.25f;
+	float pad0[2]{};
+};
+
+struct alignas(16) CompositePush
+{
+	glm::vec2 froxelClips{ 0.0f };
+
+	uint32_t fogEnabled = 0u;
+	float pad0 = 0.0f;
 };
 
 struct alignas(16) LensFlarePush
 {
+	glm::vec2 froxelClips{ 0.0f };
+	uint32_t fogEnabled = 0u;
+	float pad0 = 0.0f;
+
 	// Quarter res
 	glm::vec2 outputRes{ 0.0f };
 	glm::vec2 invOutputRes{ 0.0f };
 
-	glm::vec2 sunUv{ 0.5f, 0.5f };
-	float sunVisible = 1.0f;
+	glm::vec2 sunUv{ 0.0f };
+	float sunVisible = 0.0f;
 	uint32_t rainbowLUTIndex = UINT32_MAX;
 
 	// Bright pass
-	float brightThreshold = 6.0f;      // display-space luminance, exposure divided in shader
-	float brightKnee = 3.0f;
-	float brightIntensity = 1.0f;
-	float starburstIntensity = 1.2f;
+	float brightIntensity = 0.0f;
+	float starburstIntensity = 0.0f;
+	float pad1[2]{};
 
 	// Halo
-	float ringInnerRadius = 0.2f;    // fraction of the SHORT screen axis
-	float ringOuterRadius = 0.25f;
-	float chromaStrength = 0.8f;
-	float haloAnisotropy = 0.4f;
+	float ringInnerRadius = 0.0f;    // fraction of the SHORT screen axis
+	float ringOuterRadius = 0.0f;
+	float chromaStrength = 0.0f;
+	float haloAnisotropy = 0.0f;
 
 	// Anamorphic streak
-	float streakStrength = 0.12f;
-	float streakWidth = 0.012f;
-	float streakLength = 0.22f;
-	float starburstRotation = -2.0f;
+	float streakStrength = 0.0f;
+	float streakWidth = 0.0f;
+	float streakLength = 0.0f;
+	float starburstRotation = 0.0f;
 
 	// Hi-Z occlusion
-	float occlusionRadiusPixels = 5.0f;
+	float occlusionRadiusPixels = 0.0f;
 	float occlusionDepthBias = 0.0f;
-	float occlusionFade = 200.0f;      // world units, set from farClip * 0.02
+	float occlusionFade = 0.0f;      // world units
 	float sunJitterScale = 0.0f;
 
 	// Starburst shape
-	float starburstBlades = 6.0f;
-	float starburstLength = 0.1f;
-	float starburstWidth = 0.08f;     // ray angular half-width, radians
-	float haloOpacity = 0.03f;
+	float starburstBlades = 0.0f;
+	float starburstLength = 0.0f;
+	float starburstWidth = 0.0f;     // ray angular half-width, radians
+	float haloOpacity = 0.0f;
 
-	float haloSqueeze = 1.55f;
-	float haloAngleGain = 2.50f;
-	float ghostStrength = 0.060f;
-	float ghostSpacing = 1.00f;
+	float haloSqueeze = 0.0f;
+	float haloAngleGain = 0.0f;
+	float ghostStrength = 0.0f;
+	float ghostSpacing = 0.0f;
+};
+
+struct alignas(16) ChromaticAberrationPush
+{
+	float    maxShiftPixels = 0.0f;
+	float    distortionAmount = 0.0f;
+	float    falloffExponent = 0.0f;
+	uint32_t maxTaps = 0u;
 };
 
 // Screen space contact shadows usage
 struct alignas(16) SSSPush
 {
-	glm::vec4 lightCoords{0.0f};
+	glm::vec4 lightCoords{ 0.0f };
 
-	glm::ivec2 waveOffsets{0};
-	glm::vec2 invDepthSize{0.0f};
+	glm::ivec2 waveOffsets{ 0 };
+	glm::vec2 invDepthSize{ 0.0f };
 
-	float surfaceThickness = 0.005f;
-	float bilinearThreshold = 0.1f;
-	float shadowContrast = 4.0f;
-	float pad0;
+	float surfaceThickness = 0.0f;
+	float bilinearThreshold = 0.0f;
+	float shadowContrast = 0.0f;
+	float pad0 = 0.0f;
 };
 
 struct alignas(16) CMAA2Push
@@ -410,48 +435,39 @@ struct alignas(16) CMAA2Push
 	glm::vec4 params = glm::vec4(0.22f, 0.15f, 0.1f, 0.0f);
 };
 
-struct alignas(16) SkyboxPush
-{
-	glm::mat4 invVp = glm::mat4(0.0f);
-	uint32_t skyboxID = UINT32_MAX;
-	uint32_t pad0[3];
-};
-
 struct alignas(16) BloomPush
 {
-	glm::vec2 srcTexelSize;
-	glm::uvec2 dstRes;
-	float filterRadius = 1.0f;
-	uint32_t flags; // 0 = first downsample
-	float bloomThreshold = 1.0f;
-	float bloomKnee = 1.0f;
-	float emissiveBoost = 1.5f;
-	float pad0;
-	float pad1;
-	float pad2;
+	glm::vec2 srcTexelSize{ 0.0f };
+	glm::uvec2 dstRes{ 0u };
+	float filterRadius = 0.0f;
+	uint32_t flags = 0u; // 0 = first downsample
+	float bloomThreshold = 0.0f;
+	float bloomKnee = 0.0f;
 };
 
 struct alignas(16) DownsamplePush
 {
 	glm::vec2 srcTexel = glm::vec2(0.0f);
-	uint32_t applyKaris = 0;
-	uint32_t pad0;
-};
-
-struct ToneMappingSettings
-{
-	float cameraExposure = 0.18f;
-	float maxLuminance = 0.0f;
-	float midLuminance = 0.0f;
-	float minLuminance = 0.0f;
+	uint32_t applyKaris = 0u;
+	uint32_t pad0 = 0u;
 };
 
 struct alignas(16) LumaExposurePush
 {
-	uint32_t totalLumaTiles = 0;
-	float cameraExposure = 0.0;
-	float adaptationSpeed = 0.0;
-	float deltaTime = 0.0;
+	uint32_t totalLumaTiles = 0u;
+	uint32_t pixelCount = 0u;
+	uint32_t resetAdaptation = 0u;
+	uint32_t manualExposure = 0u;
+
+	float manualEV100 = 0.0f;
+	float exposureCompensation = 0.0f;
+	float adaptSpeedUp = 0.0f;
+	float adaptSpeedDown = 0.0f;
+
+	float minEV100 = 0.0f;
+	float maxEV100 = 0.0f;
+	float deltaTime = 0.0f;
+	float pad0 = 0.0f;
 };
 
 struct alignas(16) PrepassTaskPush
@@ -468,7 +484,8 @@ struct alignas(16) DepthTaskPush
 	glm::vec4 eye;             // xyz = eye pos (w=1) or light dir (w=0)
 	uint32_t  slot;
 	float  cullDistance = 0.0; // > 0 enables the range test; 0 disables (directional)
-	uint32_t pad0[2];
+	uint32_t forceBackfaceCull = 0u;
+	uint32_t pad0{};
 };
 
 struct alignas(16) TlasPush
@@ -481,8 +498,8 @@ struct alignas(16) NRDPush
 {
 	glm::vec2 resSize{ 0.0f };
 	glm::vec2 resTexel{ 0.0f };
-	uint32_t writeMotion = 0;
-	uint32_t pad0[3];
+	uint32_t writeMotion = 0u;
+	uint32_t pad0[3]{};
 };
 
 struct alignas(16) RTArgsPush
@@ -495,15 +512,15 @@ struct alignas(16) RTArgsPush
 
 struct alignas(16) RTShadowParams
 {
-	glm::vec4 sunDirectionWS{0.0f};    // xyz = direction, w = rayTMin
+	glm::vec4 sunDirectionWS{ 0.0f };  // xyz = direction, w = rayTMin
 	glm::vec4 sunTangentWS{ 0.0f };    // xyz = tangent,   w = rayTMax
 	glm::vec4 sunBitangentWS{ 0.0f };  // xyz = bitangent, w = mipBias
 	glm::vec4 sunDirectionVS{ 0.0f };  // xyz = view-space direction
 
-	float rayTMin = 0.001f;
-	float rayTMax = 500.0f;
-	float rayBias = 1e-4f;
-	float normalBias = 0.03f;
+	float rayTMin = 0.0f;
+	float rayTMax = 0.0f;
+	float rayBias = 0.0f;
+	float normalBias = 0.0f;
 };
 
 struct alignas(16) RTShadowPush
@@ -515,10 +532,10 @@ struct alignas(16) RTShadowPush
 
 	uint32_t rayBase = 0u;
 	uint32_t rayCapacity = 0u;
-	uint32_t hilbertLutID = UINT32_MAX;
+	uint32_t shadowStbnID = UINT32_MAX;
 
-	float    saturationEps = 0.02f;
-	float    disocclusionScale = 0.05f;
+	float    saturationEps = 0.0f;
+	float    disocclusionScale = 0.0f;
 	uint32_t pad0[3]{};
 };
 
@@ -527,12 +544,12 @@ struct alignas(16) ReflectPush
 	glm::vec2 halfResSize{ 0.0f };
 	glm::vec2 halfResTexel{ 0.0f };
 
-	RTShadowParams shadow{ .rayTMax = 60.0f, .rayBias = 1e-4f, .normalBias = 0.06f };
+	RTShadowParams shadow{};
 
-	float reflectRoughnessCutoff = 0.60f;
-	float roughnessFadeStart = 0.45f;
-	float ambientScale = 1.0f;
-	float bounceRoughnessCutoff = 0.35f;
+	float reflectRoughnessCutoff = 0.0f;
+	float roughnessFadeStart = 0.0f;
+	float ambientScale = 0.0f;
+	float bounceRoughnessCutoff = 0.0f;
 
 	uint32_t noiseIndex = 0u;
 	uint32_t hilbertLutID = UINT32_MAX;
@@ -540,12 +557,12 @@ struct alignas(16) ReflectPush
 	uint32_t brdfID = UINT32_MAX;
 
 	uint32_t specularID = UINT32_MAX;
-	uint32_t maxBounces = 3u;
-	uint32_t maxReflectLights = 250u;
+	uint32_t maxBounces = 0u;
+	uint32_t maxReflectLights = 0u;
 	uint32_t rayCapacity = 0u;
 
 	uint32_t rayBase = 0u;
 
-	float shadowSkipThreshold = 0.01f;
+	float shadowSkipThreshold = 0.0f;
 	uint32_t pad0[2]{};
 };

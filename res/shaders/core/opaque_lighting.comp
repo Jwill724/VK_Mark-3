@@ -1,17 +1,19 @@
-#version 450
+#version 460
 
 #extension GL_GOOGLE_include_directive : require
 #extension GL_ARB_separate_shader_objects : require
 
 #include "../include/clustered.glsl"
+#include "../include/nrd_common.glsl"
 #include "../include/common.glsl"
+#include "../include/textures.glsl"
 #include "../include/pbr.glsl"
 #include "../include/depth.glsl"
 #include "../include/shadow.glsl"
 #include "../include/lighting.glsl"
+#include "../include/world_probe_resolve.glsl"
 #include "../include/barycentric.glsl"
 #include "../include/visbuffer.glsl"
-#include "../include/nrd_common.glsl"
 
 #define TILE_DIM 16u
 
@@ -20,19 +22,7 @@ const float SHADING_DEMOD_F0 = 0.04;
 
 layout(local_size_x = TILE_DIM, local_size_y = TILE_DIM) in;
 
-layout(set = PUSH_SET, binding = PUSH_BINDING_READ_1) uniform sampler2D  gbAlbedoRough;
-layout(set = PUSH_SET, binding = PUSH_BINDING_READ_2) uniform usampler2D gbNormalMaterial;
-layout(set = PUSH_SET, binding = PUSH_BINDING_READ_3) uniform sampler2D  gbEmissive;
-layout(set = PUSH_SET, binding = PUSH_BINDING_READ_4) uniform sampler2D  depthTex;
-layout(set = PUSH_SET, binding = PUSH_BINDING_READ_5) uniform sampler2D  prepassViewNormal;
-layout(set = PUSH_SET, binding = PUSH_BINDING_READ_6) uniform sampler2D  contactShadowMask;
-layout(set = PUSH_SET, binding = PUSH_BINDING_READ_7) uniform sampler2D  bentNormalAO;
-layout(set = PUSH_SET, binding = PUSH_BINDING_READ_8) uniform sampler2D  giIndirect;
-layout(set = PUSH_SET, binding = PUSH_BINDING_READ_9) uniform sampler2D  rtReflectDenoised;
-layout(set = PUSH_SET, binding = PUSH_BINDING_READ_10) uniform sampler2D rtShadowDenoised;
-layout(set = PUSH_SET, binding = PUSH_BINDING_READ_11) uniform usampler2D visBuffer;
-
-layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1) writeonly uniform image2D hdrColor;
+layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1, rgba16f) uniform image2D hdrColor;
 layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_2) writeonly uniform image2D diffuseRadianceHalf;
 layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_3) writeonly uniform image2D shadingSignalHalf;
 
@@ -63,12 +53,76 @@ shared uint sSliceMax;
 shared vec4 sDiffuseRadiance[WG_THREADS];
 shared vec2 sShadingSignal[WG_THREADS];
 
+vec4 SampleReflectionBilateralTargets(
+	SceneData scene,
+	vec2 uv,
+	vec2 reflectHalfTexel,
+	float centerViewZ)
+{
+	vec2 hp = uv / reflectHalfTexel - 0.5;
+	ivec2 base = ivec2(floor(hp));
+	vec2 f = hp - vec2(base);
+
+	float bw[4] = float[4](
+		(1.0 - f.x) * (1.0 - f.y),
+		f.x * (1.0 - f.y),
+		(1.0 - f.x) * f.y,
+		f.x * f.y);
+
+	ivec2 off[4] = ivec2[4](
+		ivec2(0, 0),
+		ivec2(1, 0),
+		ivec2(0, 1),
+		ivec2(1, 1));
+
+	// reflectHalfTexel is 1 / reflection target extent.
+	// Preserve the existing reflection bounds calculation.
+	ivec2 halfExtent = max(
+		ivec2(floor(vec2(1.0) / reflectHalfTexel + 0.5)),
+		ivec2(1));
+	ivec2 halfMax = halfExtent - 1;
+
+	vec2 vpSize = scene.renderExtentSize.xy;
+
+	vec4 sum = vec4(0.0);
+	float wsum = 0.0;
+
+	for (int i = 0; i < 4; ++i)
+	{
+		ivec2 h = clamp(base + off[i], ivec2(0), halfMax);
+		vec2 huv = (vec2(h) + 0.5) * reflectHalfTexel;
+		ivec2 full = clamp(
+			ivec2(huv * vpSize),
+			ivec2(0),
+			ivec2(vpSize) - 1);
+
+		float rawDepth = SampleTextureFetch(scene.renderTargetIDs.depthResolvedID, full, 0).r;
+		float z = screenToViewDepth(
+			rawDepth,
+			scene.depthLinearizeMult,
+			scene.depthLinearizeAdd);
+
+		float w = bw[i] * exp(
+			-abs(z - centerViewZ) /
+			max(centerViewZ * 0.02, 1e-4));
+
+		sum += SampleTextureFetch(scene.renderTargetIDs.rtReflectDenoisedID, h, 0) * w;
+		wsum += w;
+	}
+
+	return wsum > 1e-5
+		? sum / wsum
+		: SampleTextureFetch(scene.renderTargetIDs.rtReflectDenoisedID, clamp(base, ivec2(0), halfMax), 0);
+}
+
 void main()
 {
 	SceneData     scene         = getSceneData();
 	ClusteredData clusteredData = getClusteredData();
 	DebugToggles  debug         = getDebugToggles();
 	uint visibleLightCount      = getVisibleLightCountBuffer().count;
+	float preExposure           = getPreExposure();
+	float invPreExposure        = 1.0 / preExposure;
 
 	uvec2 gid    = gl_GlobalInvocationID.xy;
 	uint  tid    = gl_LocalInvocationIndex;
@@ -93,7 +147,7 @@ void main()
 
 	if (inBounds)
 	{
-		rawDepth = texelFetch(depthTex, ivec2(gid), 0).r;
+		rawDepth = SampleTextureFetch(scene.renderTargetIDs.depthResolvedID, ivec2(gid), 0).r;
 		isSky    = (rawDepth <= 0.0);
 
 		if (!isSky)
@@ -192,16 +246,16 @@ void main()
 
 	if (inBounds && !isSky)
 	{
-		vec4  ar     = texelFetch(gbAlbedoRough, ivec2(gid), 0);
+		vec4  ar     = SampleTextureFetch(scene.renderTargetIDs.gBufferAlbedoRoughID, ivec2(gid), 0);
 		vec3  albedo = ar.rgb * ar.rgb;
 		float rough  = ar.a * ar.a;
 
-		uint packedMat = texelFetch(gbNormalMaterial, ivec2(gid), 0).r;
+		uint packedMat = SampleTexelFetch(scene.renderTargetIDs.gBufferNormalMaterialID, ivec2(gid), 0).r;
 		vec3  N;
 		float metal;
 		unpackNormalMetal(packedMat, N, metal);
 
-		uvec2 visIds       = texelFetch(visBuffer, ivec2(gid), 0).xy;
+		uvec2 visIds       = SampleTexelFetch(scene.renderTargetIDs.visibilityID, ivec2(gid), 0).xy;
 		InstanceInput inst = getInstanceInputBuffer().instanceInputs[visInstanceID(visIds.x)];
 		Material      mat  = getMaterialBuffer().materials[inst.materialID];
 
@@ -211,40 +265,75 @@ void main()
 		if ((inst.flags & DOUBLE_SIDED) != 0u)
 			opaqueSurface.diffuseTrans = max(opaqueSurface.diffuseTrans, DOUBLE_SIDED_TRANS_FLOOR);
 
-		vec3 emissive = texelFetch(gbEmissive, ivec2(gid), 0).rgb;
-		vec3 vsN      = octDecode(texelFetch(prepassViewNormal, ivec2(gid), 0).rg * 2.0 - 1.0);
+		vec3 emissive = imageLoad(hdrColor, ivec2(gid)).rgb * invPreExposure;
+		vec3 vsN      = octDecode(SampleTextureFetch(scene.renderTargetIDs.viewNormalsID, ivec2(gid), 0).rg * 2.0 - 1.0);
 		vec3 geometricNormalWS = normalize(mat3(scene.invView) * vsN);
 
-		vec3 sunColor = scene.sunlightColor.rgb * scene.sunlightColor.a;
+		vec3 sunColor = atmosphereSunAtWorld(worldPos);
 		vec3 L = normalize(scene.sunlightDirection.xyz);
 
 		float aoTerm = 1.0;
 		vec3 bentWS = N;
 		float bentConf = 0.0;
+
 		if (debug.giMode != OFF)
 		{
-			vec4 bentAo = texelFetch(bentNormalAO, ivec2(gid), 0);
-			aoTerm *= bentAo.a;
+			vec4 bentAo = SampleTextureFetch(
+				scene.renderTargetIDs.bentNormalAOID,
+				ivec2(gid),
+				0);
+
+			aoTerm = clamp(bentAo.a, 0.0, 1.0);
 
 			if (debug.giMode == VBGI)
 			{
-				bentWS   = normalize(bentAo.rgb * 2.0 - 1.0);
+				bentWS = normalize(bentAo.rgb * 2.0 - 1.0);
 				bentConf = 1.0 - aoTerm;
 			}
-		}
+}
+
+		vec3 irradianceN = (bentConf > 0.0)
+			? normalize(mix(N, bentWS, bentConf))
+			: N;
+
+		WPLighting wp = sampleWorldProbesResolved(
+			screenspace_uv,
+			worldPos,
+			irradianceN,
+			geometricNormalWS);
+
+		float probeCoverage = wp.valid
+			? saturate(wp.coverage)
+			: 0.0;
+
+		// The cache stores E/pi. Keep your existing irradiance variable in E units.
+		// Zero is the fallback here: unsupported regions receive no probe sky light.
+		vec3 irradiance = wp.sky * (PI * probeCoverage);
+
+		// Probe sky already includes traced sky occlusion.
+		// Apply the screen-space AO term, without multiplying sky visibility again.
+		vec3 diffuseOcclusion = MultiBounceAO(aoTerm, opaqueSurface.diffuseAlbedo);
+
+		vec3 R = reflect(-opaqueSurface.V, N);
+
+		float skyVis = saturate(wp.skyVisibility) * probeCoverage;
+		// Geometric hemisphere restriction.
+		float horizon = saturate(1.0 + dot(R, geometricNormalWS));
+		skyVis *= horizon * horizon;
 
 		float specAO = SpecAO_Conservative(aoTerm, opaqueSurface.NdotV, rough);
 		if (bentConf > 0.0)
 		{
-			vec3  R          = reflect(-opaqueSurface.V, N);
 			float bentSpecAO = bentConeVisibility(bentWS, R, aoTerm);
 			specAO = mix(specAO, min(specAO, bentSpecAO), bentConf * (1.0 - rough));
 		}
 
+		specAO *= mix(1.0, skyVis, 1.0 - rough);
+
 		float contactShadows = 1.0;
 		if (DBG(enableSSS))
 		{
-			contactShadows = texture(contactShadowMask, screenspace_uv).r;
+			contactShadows = SampleTexture(scene.renderTargetIDs.ssContactShadowsID, screenspace_uv).r;
 		}
 
 		vec2 fragCoord = vec2(gid) + 0.5;
@@ -260,7 +349,7 @@ void main()
 			if (debug.sunShadowFilter == SUN_SHADOW_FILTER_RT_SOFT)
 			{
 				shadow = SIGMA_BackEnd_UnpackShadow(
-					texelFetch(rtShadowDenoised, ivec2(gid), 0).r);
+					SampleTextureFetch(scene.renderTargetIDs.rtShadowDenoisedID, ivec2(gid), 0).r);
 			}
 			else if (!DBG(csmAtlasCached))
 			{
@@ -279,9 +368,9 @@ void main()
 
 		float microVisSun = MicroShadowVisibility(max(sun.NdotL, sun.transNdotL), aoTerm);
 
-		float sunMask    = shadow * microVisSun * contactShadows;
-		vec3  sunDiffuse = sun.diffuse * sunMask;
-		vec3  direct     = (sun.diffuse + sun.specular) * sunMask;
+		float sunMask     = shadow * microVisSun * contactShadows;
+		vec3  sunDiffuse  = sun.diffuse * sunMask;
+		vec3  sunSpecular = sun.specular * sunMask;
 
 		LightBuffer lightBuf = getLightBuffer();
 		vec3 localLightColor = vec3(0.0);
@@ -328,7 +417,7 @@ void main()
 				{
 					float angleScale = 1.0 - saturate(ls.NdotL);
 					float bias = MIN_SHADOW_BIAS * (0.25 + angleScale * 0.65);
-					atten *= PCFPoissonLow(shadowHash, pc.flashlightShadowMapID,
+					atten *= PCFPoissonLow(shadowHash, scene.renderTargetIDs.flashlightShadowMapID,
 										   flashUV, flashZ, bias, FLASHLIGHT_TEXEL_SIZE);
 				}
 
@@ -347,14 +436,32 @@ void main()
 			reactiveRadiance += contribution * light.changeRate;
 		}
 
-		bool giOn = (debug.giMode == VBGI) && (scene.temporal.y == 1u);
-		vec3 giRadiance = giOn
-			? texelFetch(giIndirect, ivec2(gid), 0).rgb * pc.giIntensity
-			: vec3(0.0);
+		bool giOn =
+			(debug.giMode == VBGI) &&
+			(scene.temporal.y == 1u);
 
-		uint envIndex = min(debug.activeEnvMap, MAX_ENV_SETS - 1u);
-		vec3 irradianceN = normalize(mix(N, bentWS, bentConf * 0.5));
-		vec3 irradiance  = sampleIrradiance(irradianceN, getSHIrradianceBuffer().shIrr[envIndex].sh);
+		vec3 giRadiance = vec3(0.0);
+
+		if (debug.giMode == VBGI)
+		{
+			vec3 cachedGI = wp.bounce * probeCoverage;
+
+			vec3 localGI = vec3(0.0);
+			float localConfidence = 0.0;
+
+			if (giOn)
+			{
+				vec4 gi = SampleTextureFetch(scene.renderTargetIDs.indirectSSGIID, ivec2(gid), 0);
+
+				localGI = gi.rgb * invPreExposure;
+				localConfidence = saturate(gi.a);
+			}
+
+			giRadiance = mix(
+				cachedGI,
+				localGI,
+				localConfidence) * pc.giIntensity;
+		}
 
 		vec3 ambientDiffuse;
 		vec3 ambientSpecular;
@@ -363,34 +470,39 @@ void main()
 		vec4 rtSpec = vec4(0.0);
 		if (DBG(enableRTReflections))
 		{
-			vec4 packed = SampleReflectionBilateral(
-				scene, screenspace_uv, pc.halfTexel, viewDepth, depthTex, rtReflectDenoised);
+			vec4 packed = SampleReflectionBilateralTargets(
+				scene, screenspace_uv, pc.halfTexel, viewDepth);
 
 			vec4 spec = REBLUR_BackEnd_UnpackRadianceAndNormHitDist(packed);
+			spec.rgb *= invPreExposure;
 
 			float fade = 1.0 - smoothstep(
 				pc.reflectRoughFade, pc.reflectRoughCutoff, opaqueSurface.rough);
 
 			rtSpec = vec4(spec.rgb, fade);
-			specAO = min(specAO, mix(1.0, spec.a, fade));
 		}
 
 		evaluateAmbient(ambientDiffuse, ambientSpecular, opaqueSurface,
-						irradiance, giRadiance, aoTerm, specAO, giSpecBlend,
-						pc.specularID, rtSpec);
+						irradiance, giRadiance, diffuseOcclusion, specAO, giSpecBlend,
+						skyVis, rtSpec);
+
+		vec3 sunSpecKept = sunSpecular * (1.0 - rtSpec.a);
+		vec3 direct      = sunDiffuse + sunSpecKept;
 
 		vec3 color = emissive + direct + localLightColor + ambientDiffuse + ambientSpecular;
 
 		float reactive = saturate(luminance(reactiveRadiance) / luminance(color + reactiveRadiance));
 
-		imageStore(hdrColor, ivec2(gid), vec4(color, reactive));
+		imageStore(hdrColor, ivec2(gid), vec4(sanitizeHDR(color * preExposure, COLOR_HISTORY_MAX), reactive));
 
 		vec3 demod = max(albedo * (1.0 - metal) + vec3(SHADING_DEMOD_F0), vec3(1e-3));
-		shadingSignal = vec2(luminance((direct + localLightColor + giRadiance) / demod), sunMask);
+		shadingSignal = vec2(
+			luminance((sunDiffuse + localDiffuse) / demod) * preExposure,
+			sunMask);
 
-		float glossFactor = rough * rough;
-		diffuseRadiance = emissive + sunDiffuse + localDiffuse + ambientDiffuse
-						+ (sun.specular * sunMask + localSpecular) * glossFactor;
+		vec3 skySource = opaqueSurface.kD * opaqueSurface.diffuseAlbedo * irradiance * (1.0 / PI) * diffuseOcclusion;
+		diffuseRadiance = (sunDiffuse + localDiffuse + skySource) * preExposure;
+		diffuseRadiance = min(diffuseRadiance, vec3(RESOLVE_TARGET_MAX));
 	}
 
 	sDiffuseRadiance[tid] = vec4(diffuseRadiance, (inBounds && !isSky) ? 1.0 : 0.0);
@@ -415,9 +527,8 @@ void main()
 				   + sShadingSignal[tid + TILE_DIM + 1u];
 
 			vec3 avg = (q.w > 0.0) ? q.rgb / q.w : vec3(0.0);
-			imageStore(diffuseRadianceHalf, halfPix, vec4(avg * pc.bounceFeedback, 0.0));
-			imageStore(shadingSignalHalf, halfPix,
-				vec4((q.w > 0.0) ? s / q.w : vec2(0.0), 0.0, 0.0));
+			imageStore(diffuseRadianceHalf, halfPix, vec4(avg, 0.0));
+			imageStore(shadingSignalHalf, halfPix, vec4(s * 0.25, q.w * 0.25, 0.0));
 		}
 	}
 }

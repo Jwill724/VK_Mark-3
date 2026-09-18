@@ -138,6 +138,19 @@ struct alignas(16) SceneInfo
 	glm::vec2 ndcToViewMult;           // tanHalfFov.x *  2, tanHalfFov.y * -2
 	glm::vec2 ndcToViewAdd;            // tanHalfFov.x * -1, tanHalfFov.y *  1
 	glm::mat4 flashlightVP{0.0f};
+
+	glm::vec4 atmosphereRayleigh{ 0.0f };
+	glm::vec4 atmosphereMie{ 0.0f };
+	glm::vec4 atmosphereAbsorption{ 0.0f };
+	glm::vec4 atmosphereGeometry{ 0.0f };
+	glm::uvec4 atmosphereIntegration{ 0u };
+
+	glm::vec4 atmospherePlacement{ 0.0f };
+	glm::vec4 atmosphereScattering{ 0.0f };
+	glm::vec4 atmosphereSun{ 0.0f };
+	glm::vec4 atmosphereGround{ 0.0f };
+
+	RD::RenderTargetIDs renderTargetIDs{};
 };
 
 struct alignas(16) DirectionalCSMInfo
@@ -166,21 +179,17 @@ struct alignas(16) VolumetricShadowInfo
 	glm::mat4 cascadeLightView;
 	glm::vec4 params;
 	// x = shadow map ID
-	// y = enabled
+	// y = cascadeWorldTexel
 	// z = shadow texel size
 	// w = light-space epsilon
 
 	glm::vec4 receiverLSMin;
 	glm::vec4 receiverLSMax;
-
-	float cascadeWorldTexel;
-
-	float pad0[3];
 };
 
 struct ShadowControl
 {
-	float splitLambda                = 0.97f;
+	float splitLambda                = 0.96f;
 	float bias                       = 0.0001f;
 	float shadowFar                  = 1000.0f;
 	float lsEpsilon                  = 1.0f;
@@ -193,7 +202,7 @@ struct ShadowControl
 	float pcssContactOffsetTexels = 1.0f;
 	float pcssOffsetGapFraction = 0.25f;
 
-	glm::vec4 pcssMaxRadiusTexels = { 9.0f, 6.0f, 4.0f, 2.0f };
+	glm::vec4 pcssMaxRadiusTexels = { 6.0f, 3.0f, 2.0f, 1.0f };
 
 	// Doubles the far depth range
 	bool enableShadowDepthExtendHack = false;

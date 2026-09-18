@@ -55,8 +55,8 @@ private:
 	void SetAddress(RD::Renderer_Buffer slot, uint64_t address);
 	void RemoveAddress(RD::Renderer_Buffer slot);
 
-	std::array<uint64_t,        ADDRESS_TABLE_BUFFER_COUNT> m_addresses;  // Primary array that stores buffer pointers, entry in the gpu
-	std::array<AllocatedBuffer, ADDRESS_TABLE_BUFFER_COUNT> m_gpuBuffers; // Full handles
+	std::array<uint64_t, ADDRESS_TABLE_BUFFER_COUNT> m_addresses{};  // Primary array that stores buffer pointers, entry in the gpu
+	std::array<AllocatedBuffer, ADDRESS_TABLE_BUFFER_COUNT> m_gpuBuffers{}; // Full handles
 
 	uint32_t m_cpuVersion    = 1u; // increment when modified
 	uint32_t m_gpuVersion    = 0u; // last uploaded version

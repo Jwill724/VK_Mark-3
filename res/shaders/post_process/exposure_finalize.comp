@@ -1,63 +1,143 @@
-#version 450
+#version 460
 
 #extension GL_ARB_separate_shader_objects : require
 #extension GL_GOOGLE_include_directive : require
 
 #include "../include/common.glsl"
 
-// Amazing resource on why exposure is important
-// https://bruop.github.io/exposure/
-
 layout(local_size_x = 256) in;
 
-layout(push_constant) uniform ExposurePush {
+layout(push_constant) uniform ExposurePush
+{
 	uint totalTiles;
-	float cameraExposure;
+	uint pixelCount;
+	uint resetAdaptation;
+	uint manualExposure;
+
+	float manualEV100;
+	float exposureCompensation;
+	float adaptSpeedUp;
+	float adaptSpeedDown;
+
+	float minEV100;
+	float maxEV100;
+	float deltaTime;
+	float pad0;
 } pc;
 
-shared float sharedSum[256];
+const float EV_CALIBRATION_S = 8.0;
+const float EV_EXPOSURE_SCALE = 1.2;
+
+// Maximum extra exposure permitted by geometric-mean metering,
+// relative to arithmetic-mean metering.
+//
+// 0 = arithmetic mean dominates.
+// 1 = allow up to one stop of additional shadow lifting.
+// Larger values allow stronger exposure increases in dark compositions.
+const float MAX_SHADOW_LIFT_STOPS = 1.0;
+
+shared vec4 sharedSum[256];
 
 void main()
 {
 	LuminanceBuffer lBuf = getLuminanceBuffer();
-	SceneData scene = getSceneData();
+	uint lane = gl_LocalInvocationIndex;
 
-	uint gid = gl_GlobalInvocationID.x;
-	uint lid = gl_LocalInvocationIndex;
+	vec4 value = vec4(0.0);
 
-	float value = 0.0;
-	if (gid < pc.totalTiles) {
-		value = lBuf.luminanceSums[gid].x;
-	}
+	for (uint i = lane; i < pc.totalTiles; i += 256u)
+		value += lBuf.luminanceSums[i + 1u];
 
-	sharedSum[lid] = value;
+	sharedSum[lane] = value;
 	barrier();
 
-	for (uint stride = gl_WorkGroupSize.x >> 1; stride > 0; stride >>= 1) {
-		if (lid < stride) {
-			sharedSum[lid] += sharedSum[lid + stride];
-		}
+	for (uint stride = 128u; stride > 0u; stride >>= 1u)
+	{
+		if (lane < stride)
+			sharedSum[lane] += sharedSum[lane + stride];
+
 		barrier();
 	}
 
-	// The first thread of the last workgroup does the final total + exposure
-	if (gl_WorkGroupID.x == gl_NumWorkGroups.x - 1 && lid == 0) {
-		float totalLog = 0.0;
+	if (lane != 0u)
+		return;
 
-		// Accumulate all previous group results
-		for (uint i = 0; i < gl_NumWorkGroups.x - 1; ++i) {
-			totalLog += lBuf.luminanceSums[i].x;
-		}
+	vec4 header = lBuf.luminanceSums[0];
 
-		totalLog += sharedSum[0];
+	float previousExposure = max(header.x, EXPOSURE_MIN);
+	float previousEV100 = header.z;
 
-		uint pixelCount = max(uint(scene.displayExtentSize.z), 1u);
+	bool hasHistory =
+		pc.resetAdaptation == 0u &&
+		header.w > 0.0;
 
-		float Lavg = exp(totalLog / float(pixelCount));
-		Lavg = clamp(Lavg, 0.001, 100.0);
+	float sampleCount = sharedSum[0].y;
 
-		float exposure = pc.cameraExposure / Lavg;
+	if (pc.manualExposure == 0u && sampleCount <= 0.0)
+	{
+		lBuf.luminanceSums[0] = vec4(
+			previousExposure,
+			previousExposure,
+			previousEV100,
+			header.w);
 
-		lBuf.luminanceSums[0] = vec4(exposure, Lavg, 0.0, 0.0);
+		return;
 	}
+
+	float targetEV100 = pc.manualEV100;
+
+	if (pc.manualExposure == 0u)
+	{
+		float inverseCount = 1.0 / max(sampleCount, 1.0);
+
+		float geometricMean = exp(
+			sharedSum[0].x * inverseCount);
+
+		float arithmeticMean = max(
+			sharedSum[0].z * inverseCount,
+			0.0);
+
+		// Prevent near-black pixels from driving exposure far above
+		// what the frame's average linear luminance would permit.
+		float minimumMeterLuminance =
+			arithmeticMean * exp2(-MAX_SHADOW_LIFT_STOPS);
+
+		float meterLuminance = clamp(
+			max(geometricMean, minimumMeterLuminance),
+			1e-4,
+			1e6);
+
+		targetEV100 = log2(
+			meterLuminance * EV_CALIBRATION_S);
+	}
+
+	// Preserve your existing convention: positive compensation darkens.
+	targetEV100 += pc.exposureCompensation;
+	targetEV100 = clamp(
+		targetEV100,
+		pc.minEV100,
+		pc.maxEV100);
+
+	float ev100 = targetEV100;
+
+	if (hasHistory && pc.manualExposure == 0u)
+	{
+		float speed = targetEV100 > previousEV100
+			? pc.adaptSpeedUp
+			: pc.adaptSpeedDown;
+
+		float historyWeight = exp(
+			-max(pc.deltaTime, 0.0) * max(speed, 0.0));
+
+		ev100 = mix(targetEV100, previousEV100, historyWeight);
+	}
+
+	float exposure = 1.0 / (
+		EV_EXPOSURE_SCALE * exp2(ev100));
+
+	lBuf.luminanceSums[0] = vec4(
+		exposure,
+		previousExposure,
+		ev100,
+		1.0);
 }

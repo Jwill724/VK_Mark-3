@@ -1,0 +1,52 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "../include/world_probe.glsl"
+
+layout(local_size_x = 64) in;
+layout(push_constant, scalar) uniform WPPush { uvec4 update; } pc;
+
+shared vec4 directions[64];
+shared vec4 radiance[64];
+
+void main()
+{
+	uint id;
+	if (!wpScheduledProbe(WP_QUEUE_RELIGHT, gl_WorkGroupID.x, id)) return;
+	WorldProbeBuffer b = getWorldProbeBuffer();
+
+	if (b.probes[id].state.x == 0u || b.probes[id].meta.w == 0u ||
+		(b.probes[id].cell.w & WP_FLAG_MOVED) != 0) return;
+
+	uint lane = gl_LocalInvocationIndex;
+
+	WPHeader h = b.header;
+
+	bool quarter = (b.probes[id].cell.w & WP_FLAG_QUARTER_TRACE) != 0;
+	uint ray = wpLogicalRayIndex(lane, quarter);
+	vec3 v = wpOctVector(wpRayUV(ray));
+	float len = length(v);
+	vec3 dir = v / len;
+	bool miss = wpRayClass(b.probes[id].rayClassMask, lane) == 0u;
+	directions[lane] = vec4(dir, 4.0 / (64.0 * len * len * len));
+	radiance[lane] = vec4(miss ? wpSkyAt(b.probes[id].position.xyz, dir, h) : vec3(0), miss ? 1.0 : 0.0);
+	float history = b.probes[id].state.z == h.revisions.z ? h.blend.x : 0.0;
+
+	barrier();
+	if (lane < 6u)
+	{
+		vec4 sum = vec4(0); float norm = 0.0;
+		for (uint i = 0u; i < 64u; ++i)
+		{
+			float w = max(dot(WP_AXES[lane],directions[i].xyz), 0.0) * directions[i].w;
+			sum += radiance[i] * w; norm += w;
+		}
+		b.probes[id].sky[lane] = mix(sum / max(norm, 1e-8), b.probes[id].sky[lane], history);
+	}
+
+	if (lane == 0u)
+	{
+		b.probes[id].state.z = h.revisions.z;
+		b.probes[id].meta.y = h.revisions.x;
+	}
+}

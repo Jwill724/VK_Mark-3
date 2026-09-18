@@ -3,7 +3,6 @@
 #include "World.h"
 #include "Scene.h"
 #include "LightingSystem.h"
-#include "../backend/memory/ResourceAllocator.h"
 #include "../RendererDefinitions.h"
 #include "../../input/UserInput.h"
 #include "../backend/memory/BindlessImageTable.h"
@@ -36,7 +35,7 @@ namespace World
 		{ ModelID::BistroExt,         {} },
 		{ ModelID::MRSpheres,         {} },
 		{ ModelID::Duck,              { RD::InstancingMethod::DrawMultiStatic, 200000 } },
-		{ ModelID::DamagedHelmet,     { RD::InstancingMethod::DrawDynamic, 1 } },
+		{ ModelID::DamagedHelmet,     { RD::InstancingMethod::DrawStatic, 1 } },
 		{ ModelID::DragonAttenuation, {} },
 		{ ModelID::City,              {} },
 		{ ModelID::Structure,         {} },
@@ -100,20 +99,29 @@ void World::Init(
 	Profiler& profiler,
 	GLFWwindow* window)
 {
-	uint32_t cookieGoboID = imgTable.GetStaticTexture(RD::Renderer_Texture::CookieGobo).m_bindlessID;
-	uint32_t flashlightShadowMapID = imgTable.GetRenderTarget(RD::Renderer_RenderTarget::FlashlightShadowMap).m_bindlessID;
+	uint32_t cookieGoboID =
+		imgTable.GetStaticTexture(RD::Renderer_Texture::CookieGobo).m_bindlessID;
+	uint32_t flashlightShadowMapID =
+		imgTable.GetRenderTarget(RD::Renderer_RenderTarget::FlashlightShadowMap).m_bindlessID;
+
 	LightingSystem::_mainFlashLight.Init(flashlightShadowMapID, cookieGoboID);
 	LightingSystem::Init();
 
 	_scene.InitScene(DEFAULT_SPAWN);
-
 	_scene.UpdateCamera(renderExtent, displayExtent, profiler, window, false);
 
-	const auto& csm = imgTable.GetRenderTarget(RD::Renderer_RenderTarget::DirectionalCSMAtlas);
+	const auto& csm =
+		imgTable.GetRenderTarget(RD::Renderer_RenderTarget::DirectionalCSMAtlas);
 	_scene.InitCSMInfo(csm.Width(), csm.Height(), csm.m_bindlessID);
 
-	const auto& volShadow = imgTable.GetRenderTarget(RD::Renderer_RenderTarget::VolumetricShadowMap);
-	_scene.InitVolumetricShadowInfo(volShadow.Width(), volShadow.Height(), volShadow.m_bindlessID);
+	const auto& volShadow =
+		imgTable.GetRenderTarget(RD::Renderer_RenderTarget::VolumetricShadowMap);
+	_scene.InitVolumetricShadowInfo(
+		volShadow.Width(),
+		volShadow.Height(),
+		volShadow.m_bindlessID);
+
+	_scene.GetSceneData().renderTargetIDs = imgTable.GetRenderTargetIDs();
 }
 
 void World::OnSceneLoaded(std::shared_ptr<ModelAsset> asset)
@@ -164,9 +172,9 @@ void World::UpdateWorldState(
 	const Extents2D& renderExtent,
 	const Extents2D& displayExtent,
 	FrameContext& frameCtx,
-	Allocator& allocator,
 	Profiler& profiler,
 	GLFWwindow* window,
+	const float adaptedEV100,
 	bool isTemporalAllowed)
 {
 	bool bIsTemporalInvalid = false; // Assume clean start each frame
@@ -245,6 +253,8 @@ void World::UpdateWorldState(
 	// Static update changes
 	frameCtx.EvaluateLightListSizeChanges(LightingSystem::_globalLightList.size());
 
+	LightingSystem::ResolveLightUnits(adaptedEV100);
+
 	bool bIsLightUploadedNeeded = (bMainList || bDynamicList || bFlashlightChanged);
 
 	bIsLightUploadedNeeded = LightingSystem::UpdateLightChangeRates() || bIsLightUploadedNeeded;
@@ -259,9 +269,7 @@ void World::UpdateWorldState(
 
 	const bool dynamicChanged = SyncGlobalInstancesAndTransforms(_sceneProfiles, _scene, deltaTime);
 
-	const bool bMotionNeeded = debug.aaMode != static_cast<uint32_t>(RD::AntiAliasingMethod::AA_OFF);
-
-	_scene.BuildMotionMatrices(bMotionNeeded, _scene.GetTemporalResult());
+	_scene.BuildMotionMatrices(_scene.GetTemporalResult());
 
 	frameCtx.EvaluateTransformsStatus(dynamicChanged);
 
@@ -287,20 +295,11 @@ void World::UpdateWorldState(
 	// Volumetric csm update
 	if (debug.enableVolumetrics)
 	{
-		_scene.UpdateVolumetricShadowInfo(profiler.volLightSettings.maxDistance);
+		_scene.UpdateVolumetricShadowInfo(profiler.froxelSettings.froxelClips.y);
 	}
 
 	// Now the temporal should be known if this frame is safe
 	_scene.SetTemporalValue(bIsTemporalInvalid);
-
-	// ================================
-	// Scene uniform buffer creation
-	// ================================
-	frameCtx.AssignSceneUniform(allocator.AllocateUniform(sceneData), allocator);
-
-	// Vulkan requires a buffer created once its defined in used shader, even if that buffer isn't actually used.
-	frameCtx.AssignCSMUniform(allocator.AllocateUniform(_scene.GetCSMData()), allocator);
-	frameCtx.AssignVolumetricShadowUniform(allocator.AllocateUniform(_scene.GetVolumetricShadowInfo()), allocator);
 }
 
 static glm::mat4 MakeClusterTransform(

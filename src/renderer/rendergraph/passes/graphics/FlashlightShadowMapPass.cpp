@@ -25,7 +25,6 @@ void RegisterFlashlightShadowMapPass(RenderGraph& graph)
 					[](const RenderPassExecutionContext& ctx)
 					{
 						return
-							ctx.frameState->IsShadowsOn() &&
 							ctx.frameState->IsFlashlightOn() &&
 							ctx.frameState->InstancesActive() &&
 							!ctx.frameState->DebugRenderFastPath();

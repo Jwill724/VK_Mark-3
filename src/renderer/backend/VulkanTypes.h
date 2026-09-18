@@ -508,6 +508,12 @@ static constexpr ImageBarrierInfo GetImageSyncScope(RD::ImageAccess access)
 					 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
 					 VK_IMAGE_LAYOUT_GENERAL };
 
+		case RD::ImageAccess::ComputeReadWrite:
+			return { VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+					 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
+					 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+					 VK_IMAGE_LAYOUT_GENERAL };
+
 		case RD::ImageAccess::ComputeReadStorage:
 			return { VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
 					 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |

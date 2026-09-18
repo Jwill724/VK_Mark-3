@@ -54,11 +54,8 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(ProjectDir)vendor\glfw\lib;$(ProjectDir)vendor\vulkan\lib;$(ProjectDir)vendor\nrd\Lib\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>NRD.lib;ShaderMakeBlob.lib;glfw3.lib;vulkan-1.lib;shaderc_combined.lib;kernel32.lib;user32.lib;gdi32.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>NRD.lib;ShaderMakeBlob.lib;glfw3.lib;vulkan-1.lib;shaderc_combinedd.lib;kernel32.lib;user32.lib;gdi32.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
-    <PreBuildEvent>
-      <Command>call "$(ProjectDir)res\shaders\compile_shaders.bat"</Command>
-    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -76,9 +73,6 @@
       <AdditionalLibraryDirectories>$(ProjectDir)vendor\glfw\lib;$(ProjectDir)vendor\vulkan\lib;$(ProjectDir)vendor\nrd\Lib\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>NRD.lib;ShaderMakeBlob.lib;glfw3.lib;vulkan-1.lib;shaderc_combined.lib;kernel32.lib;user32.lib;gdi32.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
-    <PreBuildEvent>
-      <Command>call "$(ProjectDir)res\shaders\compile_shaders.bat"</Command>
-    </PreBuildEvent>
   </ItemDefinitionGroup>
   <!-- ===================== Sources ===================== -->
   <ItemGroup>
@@ -108,16 +102,18 @@
     <!-- profiler -->
     <ClCompile Include="src\profiler\Profiler.cpp" />
     <ClCompile Include="src\profiler\EditorImgui.cpp" />
+    <ClCompile Include="src\profiler\ShaderEditorPanel.cpp" />
     <!-- input -->
     <ClCompile Include="src\input\Camera.cpp" />
     <ClCompile Include="src\input\UserInput.cpp" />
     <!-- renderer -->
-    <ClCompile Include="src\renderer\backend\pipelines\PipelineTable.cpp" />
     <ClCompile Include="src\renderer\Renderer.cpp" />
     <!-- renderer / rendergraph -->
+    <ClCompile Include="src\renderer\rendergraph\passes\compute\AtmosphericSkyPass.cpp" />
     <ClCompile Include="src\renderer\rendergraph\passes\compute\RayTracedShadowsPass.cpp" />
     <ClCompile Include="src\renderer\rendergraph\passes\compute\ContrastAdaptiveSharpeningPass.cpp" />
     <ClCompile Include="src\renderer\rendergraph\passes\compute\VolumetricFogPass.cpp" />
+    <ClCompile Include="src\renderer\rendergraph\passes\compute\WorldProbesPass.cpp" />
     <ClCompile Include="src\renderer\rendergraph\passes\graphics\VolumetricShadowMap.cpp" />
     <ClCompile Include="src\renderer\rendergraph\RenderGraphExecute.cpp" />
     <ClCompile Include="src\renderer\rendergraph\RenderGraphCompile.cpp" />
@@ -131,7 +127,6 @@
     <ClCompile Include="src\renderer\rendergraph\passes\graphics\LineDebugPass.cpp" />
     <ClCompile Include="src\renderer\rendergraph\passes\graphics\FlashlightShadowMapPass.cpp" />
     <ClCompile Include="src\renderer\rendergraph\passes\graphics\ThePrepass.cpp" />
-    <ClCompile Include="src\renderer\rendergraph\passes\graphics\SkyboxPass.cpp" />
     <ClCompile Include="src\renderer\rendergraph\passes\graphics\TransparentForwardPass.cpp" />
     <ClCompile Include="src\renderer\rendergraph\passes\graphics\WireframePass.cpp" />
     <!-- renderer / rendergraph / passes / compute -->
@@ -153,7 +148,6 @@
     <ClCompile Include="src\renderer\rendergraph\passes\compute\RayTracedReflectionsPass.cpp" />
     <ClCompile Include="src\renderer\rendergraph\passes\compute\ScreenSpaceGlobalIlluminationPass.cpp" />
     <ClCompile Include="src\renderer\rendergraph\passes\compute\ScreenSpaceContactShadowsPass.cpp" />
-    <ClCompile Include="src\renderer\rendergraph\passes\compute\ScreenSpaceVolumetricLightPass.cpp" />
     <ClCompile Include="src\renderer\rendergraph\passes\compute\ShadowBoundsPass.cpp" />
     <ClCompile Include="src\renderer\rendergraph\passes\compute\TemporalAntiAliasingPass.cpp" />
     <ClCompile Include="src\renderer\rendergraph\passes\compute\TopLevelAccelerationStructureBuildPass.cpp" />
@@ -168,6 +162,7 @@
     <ClCompile Include="src\renderer\frame\FrameContext.cpp" />
     <ClCompile Include="src\renderer\frame\FrameResources.cpp" />
     <!-- renderer / scene -->
+    <ClCompile Include="src\renderer\scene\RendererAssetUpload.cpp" />
     <ClCompile Include="src\renderer\scene\Scene.cpp" />
     <ClCompile Include="src\renderer\scene\World.cpp" />
     <ClCompile Include="src\renderer\scene\DrawPreparation.cpp" />
@@ -184,6 +179,10 @@
     <ClCompile Include="src\renderer\backend\descriptors\DescriptorManager.cpp" />
     <ClCompile Include="src\renderer\backend\descriptors\DescriptorWriter.cpp" />
     <ClCompile Include="src\renderer\backend\pipelines\PipelineManager.cpp" />
+    <ClCompile Include="src\renderer\backend\pipelines\PipelineTable.cpp" />
+    <ClCompile Include="src\renderer\backend\shaders\ShaderCompiler.cpp" />
+    <ClCompile Include="src\renderer\backend\shaders\ShaderCache.cpp" />
+    <ClCompile Include="src\renderer\backend\shaders\ShaderHotReload.cpp" />
     <ClCompile Include="src\renderer\backend\ImageUtils.cpp" />
     <ClCompile Include="src\renderer\backend\BufferBarriers.cpp" />
     <ClCompile Include="src\renderer\backend\nrd\NRDContext.cpp" />
@@ -193,6 +192,7 @@
     <ClCompile Include="src\renderer\backend\memory\BindlessImageTable.cpp" />
     <ClCompile Include="src\renderer\backend\memory\BindlessBDATable.cpp" />
     <!-- third-party (no PCH) -->
+    <ClCompile Include="src\renderer\scene\WorldProbes.cpp" />
     <ClCompile Include="vendor\bc7enc\bc7enc.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
@@ -324,6 +324,7 @@
     <ClInclude Include="src\profiler\ProfilerTypes.h" />
     <ClInclude Include="src\profiler\Profiler.h" />
     <ClInclude Include="src\profiler\EditorImgui.h" />
+    <ClInclude Include="src\profiler\ShaderEditorPanel.h" />
     <ClInclude Include="src\renderer\backend\pipelines\PipelineDefs.h" />
     <ClInclude Include="src\renderer\backend\pipelines\PipelineTable.h" />
     <ClInclude Include="src\renderer\frame\ResizeCoordinator.h" />
@@ -339,7 +340,10 @@
     <ClInclude Include="src\renderer\rendergraph\RenderGraphBuilder.h" />
     <ClInclude Include="src\renderer\rendergraph\scopes\GraphicsScope.h" />
     <ClInclude Include="src\renderer\rendergraph\scopes\ComputeScope.h" />
+    <ClInclude Include="src\renderer\scene\AtmosphereState.h" />
+    <ClInclude Include="src\renderer\scene\AtmosphereTypes.h" />
     <ClInclude Include="src\renderer\scene\LightingSystem.h" />
+    <ClInclude Include="src\renderer\scene\LightUnits.h" />
     <ClInclude Include="src\renderer\scene\Scene.h" />
     <ClInclude Include="src\renderer\scene\World.h" />
     <ClInclude Include="src\renderer\scene\DrawPreparation.h" />
@@ -354,6 +358,9 @@
     <ClInclude Include="src\renderer\backend\descriptors\DescriptorWriter.h" />
     <ClInclude Include="src\renderer\backend\pipelines\PipelineManager.h" />
     <ClInclude Include="src\renderer\backend\pipelines\PipelineBuilder.h" />
+    <ClInclude Include="src\renderer\backend\shaders\ShaderCompiler.h" />
+    <ClInclude Include="src\renderer\backend\shaders\ShaderCache.h" />
+    <ClInclude Include="src\renderer\backend\shaders\ShaderHotReload.h" />
     <ClInclude Include="src\renderer\backend\ImageUtils.h" />
     <ClInclude Include="src\renderer\backend\BufferBarriers.h" />
     <ClInclude Include="src\renderer\backend\nrd\NRDContext.h" />
@@ -369,6 +376,8 @@
     <ClInclude Include="src\renderer\backend\memory\AllocatedImage.h" />
     <ClInclude Include="src\renderer\backend\memory\BindlessBDATable.h" />
     <ClInclude Include="src\renderer\backend\memory\BindlessImageTable.h" />
+    <ClInclude Include="src\renderer\scene\WorldProbeBudget.h" />
+    <ClInclude Include="src\renderer\scene\WorldProbeTypes.h" />
     <ClInclude Include="vendor\bc7enc\bc7enc.h" />
     <ClInclude Include="vendor\bc7enc\rgbcx.h" />
     <ClInclude Include="vendor\bc7enc\rgbcx_table4.h" />
@@ -379,7 +388,26 @@
   <!-- ===================== Scripts / Resources ===================== -->
   <ItemGroup>
     <None Include="build_nrd.bat" />
-    <None Include="res\shaders\compile_shaders.bat" />
+    <None Include="res\shaders\include\ssgi_push.glsl" />
+    <None Include="res\shaders\include\world_probe_cache.glsl" />
+    <None Include="res\shaders\include\world_probe_cache_common.glsl" />
+    <None Include="res\shaders\include\world_probe_coefficients.glsl" />
+    <None Include="res\shaders\include\world_probe_packing.glsl" />
+    <None Include="res\shaders\include\world_probe_resolve.glsl" />
+    <None Include="res\shaders\include\world_probe_surface.glsl" />
+    <None Include="res\shaders\include\world_probe_types.glsl" />
+    <None Include="res\shaders\ssgi\ao_temporal.comp" />
+    <None Include="res\shaders\world_probes\wp_cache_fallback.comp" />
+    <None Include="res\shaders\world_probes\wp_cache_resolve.comp" />
+    <None Include="res\shaders\world_probes\wp_debug.comp" />
+    <None Include="res\shaders\world_probes\wp_inject.comp" />
+    <None Include="res\shaders\world_probes\wp_prepare.comp" />
+    <None Include="res\shaders\world_probes\wp_reconstruct.comp" />
+    <None Include="res\shaders\world_probes\wp_relocate.comp" />
+    <None Include="res\shaders\world_probes\wp_relight.comp" />
+    <None Include="res\shaders\world_probes\wp_resolve.comp" />
+    <None Include="res\shaders\world_probes\wp_sky_mean.comp" />
+    <None Include="res\shaders\world_probes\wp_sky_trace.comp" />
   </ItemGroup>
   <!-- ===================== Shaders/Assets (None) ===================== -->
   <ItemGroup>
@@ -387,6 +415,10 @@
     <None Include="res\shaders\core\transparent_cull.task" />
     <None Include="res\shaders\core\transparent_draw.mesh" />
     <None Include="res\shaders\include\reflect_common.glsl" />
+    <None Include="res\shaders\include\atmosphere.glsl" />
+    <None Include="res\shaders\include\atmosphere_math.glsl" />
+    <None Include="res\shaders\include\atmosphere_lighting.glsl" />
+    <None Include="res\shaders\include\textures.glsl" />
     <None Include="res\shaders\include\rt_core.glsl" />
     <None Include="res\shaders\include\rt_geometry.glsl" />
     <None Include="res\shaders\include\rt_params.glsl" />
@@ -406,6 +438,7 @@
     <None Include="res\shaders\include\visbuffer.glsl" />
     <None Include="res\shaders\include\common.glsl" />
     <None Include="res\shaders\include\clustered.glsl" />
+    <None Include="res\shaders\include\froxel.glsl" />
     <None Include="res\shaders\include\depth.glsl" />
     <None Include="res\shaders\include\shadow.glsl" />
     <None Include="res\shaders\include\pbr.glsl" />
@@ -420,14 +453,16 @@
     <None Include="res\shaders\core\hi_z_gen.comp" />
     <None Include="res\shaders\core\nrd_prepare.comp" />
     <None Include="res\shaders\core\rt_ray_args.comp" />
+    <None Include="res\shaders\include\world_probe.glsl" />
+    <None Include="res\shaders\include\world_probe_rt.glsl" />
     <None Include="res\shaders\post_process\cas.comp" />
     <None Include="res\shaders\post_process\shading_signal_reduce.comp" />
-    <None Include="res\shaders\reflections\rtreflect_trace.comp" />
+    <None Include="res\shaders\reflections\rt_reflect_trace.comp" />
     <None Include="res\shaders\reflections\reflect_classify.comp" />
-    <None Include="res\shaders\shadows\rtshadow_invalid_mask.comp" />
-    <None Include="res\shaders\shadows\rtshadow_trace.comp" />
-    <None Include="res\shaders\shadows\rtshadow_classify.comp" />
-    <None Include="res\shaders\shadows\rtshadow_volume_build.comp" />
+    <None Include="res\shaders\shadows\rt_shadow_invalid_mask.comp" />
+    <None Include="res\shaders\shadows\rt_shadow_trace.comp" />
+    <None Include="res\shaders\shadows\rt_shadow_classify.comp" />
+    <None Include="res\shaders\shadows\rt_shadow_volume_build.comp" />
     <None Include="res\shaders\shadows\shadow_masked.mesh" />
     <None Include="res\shaders\shadows\shadow_maskedFS.frag" />
     <None Include="res\shaders\ssgi\hi_z_prefilter.comp" />
@@ -451,12 +486,13 @@
     <None Include="res\shaders\debug\line_debugVS.vert" />
     <None Include="res\shaders\debug\line_debugFS.frag" />
     <None Include="res\shaders\environment\hdr2cubemap.comp" />
-    <None Include="res\shaders\environment\skyboxVS.vert" />
-    <None Include="res\shaders\environment\skyboxFS.frag" />
     <None Include="res\shaders\environment\specular_prefilter.comp" />
     <None Include="res\shaders\environment\sh_irradiance.comp" />
     <None Include="res\shaders\environment\brdf_lut.comp" />
-    <None Include="res\shaders\post_process\vol_light_resolve.comp" />
+    <None Include="res\shaders\sky\sky_render.comp" />
+    <None Include="res\shaders\sky\sky_view.comp" />
+    <None Include="res\shaders\sky\atmosphere_transmittance.comp" />
+    <None Include="res\shaders\sky\atmosphere_lighting.comp" />
     <None Include="res\shaders\post_process\bloom_downsample.comp" />
     <None Include="res\shaders\post_process\bloom_upsample.comp" />
     <None Include="res\shaders\post_process\chromatic_aberration.comp" />
@@ -466,8 +502,9 @@
     <None Include="res\shaders\post_process\flare_bright.comp" />
     <None Include="res\shaders\post_process\flare_gen.comp" />
     <None Include="res\shaders\post_process\final_composite.comp" />
-    <None Include="res\shaders\post_process\vol_light_blur.comp" />
-    <None Include="res\shaders\post_process\vol_light_raymarch.comp" />
+    <None Include="res\shaders\volumetric_fog\froxel_inject.comp" />
+    <None Include="res\shaders\volumetric_fog\froxel_reproject.comp" />
+    <None Include="res\shaders\volumetric_fog\froxel_integrate.comp" />
     <None Include="res\shaders\shadows\bend_sss.comp" />
     <None Include="res\shaders\shadows\shadowT.task" />
     <None Include="res\shaders\shadows\shadowM.mesh" />

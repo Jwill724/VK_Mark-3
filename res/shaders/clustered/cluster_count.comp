@@ -1,4 +1,4 @@
-#version 450
+#version 460
 
 #extension GL_GOOGLE_include_directive    : require
 #extension GL_ARB_separate_shader_objects : require
@@ -23,6 +23,7 @@ void main()
 	uint globalIndex = gl_GlobalInvocationID.x;
 
 	// Iterate over every cluster
+
 	if (useClusterMajor)
 	{
 		uint clusterIndex = globalIndex;
@@ -33,6 +34,7 @@ void main()
 		ClusterCounts countsBuf = getClusterCountsBuffer();
 		VisibleLightIDs visibleIDsBuf = getVisibleLightIDsBuffer();
 		LightBuffer lightBuf = getLightBuffer();
+		VolClusterCounts volCountsBuf = getVolClusterCountsBuffer();
 
 		uint tileCountX = clusteredData.tileCountX;
 		uint tileCountY = clusteredData.tileCountY;
@@ -46,37 +48,75 @@ void main()
 
 		uvec2 tileSliceRange = tsrBuf.ranges[tileIndex];
 
-		if (sliceZ < tileSliceRange.x || sliceZ > tileSliceRange.y || tileSliceRange.x > tileSliceRange.y)
-		{
+		bool surfaceActive =
+			tileSliceRange.x <= tileSliceRange.y &&
+			sliceZ >= tileSliceRange.x &&
+			sliceZ <= tileSliceRange.y;
+
+		// Surface cluster is empty if this slice is outside the
+
+		// surface-derived active range.
+
+		if (!surfaceActive)
 			countsBuf.counts[clusterIndex] = 0u;
-			return;
-		}
 
 		ClusterAABB box = computeClusterAABB(
 			tileX, tileY, sliceZ, scene.proj, uvec2(scene.renderExtentSize.xy),
 			clusteredData.tileSizeX, clusteredData.tileSizeY, clusteredData.zSlices,
 			camNear, camFar);
 
-		uint localCount = 0u;
+		uint surfaceLocalCount = 0u;
+		uint volumeLocalCount  = 0u;
+
 		for (uint visibleIndex = 0u; visibleIndex < visibleCount; ++visibleIndex)
 		{
 			uint globalLightID = visibleIDsBuf.ids[visibleIndex];
-			LocalLight light = lightBuf.lights[globalLightID];
+			LocalLight light   = lightBuf.lights[globalLightID];
 
 			if (((light.flags & LIGHT_FLAG_FLASHLIGHT_OFF) != 0u) &&
 				!((light.flags & LIGHT_FLAG_CASTS_SPOT_SHADOW) != 0u) &&
-				!((light.flags & LIGHT_FLAG_FLASHLIGHT) != 0u)) continue;
+				!((light.flags & LIGHT_FLAG_FLASHLIGHT) != 0u))
+			{
+				continue;
+			}
 
 			vec3 lightVS = (scene.view * vec4(light.position, 1.0)).xyz;
-			if (!sphereOverlapsCluster(lightVS, light.radius, box)) continue;
 
-			localCount++;
-			if (localCount >= clusteredData.maxLightsPerCluster) break;
+			if (!sphereOverlapsCluster(lightVS, light.radius, box))
+				continue;
+
+			// Volumetric occupancy is purely spatial.
+
+			if (volumeLocalCount < clusteredData.maxLightsPerCluster)
+				volumeLocalCount++;
+
+			// Surface occupancy additionally requires this cluster to lie
+
+			// inside the surface-derived tile slice range.
+
+			if (surfaceActive &&
+				surfaceLocalCount < clusteredData.maxLightsPerCluster)
+			{
+				surfaceLocalCount++;
+			}
+
+			// Nothing else can affect either final count once both are full.
+
+			if (volumeLocalCount >= clusteredData.maxLightsPerCluster &&
+				(!surfaceActive ||
+				 surfaceLocalCount >= clusteredData.maxLightsPerCluster))
+			{
+				break;
+			}
 		}
 
-		countsBuf.counts[clusterIndex] = localCount;
+		volCountsBuf.counts[clusterIndex] = volumeLocalCount;
+
+		if (surfaceActive)
+			countsBuf.counts[clusterIndex] = surfaceLocalCount;
 	}
 	// Iterate each visible light over the clusters
+
 	else
 	{
 		uint visibleIndex = globalIndex;
@@ -108,17 +148,28 @@ void main()
 			camFar);
 
 		ClusterTileSliceRanges tsrBuf = getClusterTileSliceRangesBuffer();
-
 		ClusterCounts countsBuf = getClusterCountsBuffer();
+		VolClusterCounts volCountsBuf = getVolClusterCountsBuffer();
 
 		uint tileCount = clusteredData.tileCountX * clusteredData.tileCountY;
 
 		// Iterate all tiles touched by this light, then slices (clipped to active tile slice range)
+
 		for (uint tileY = lightBounds.tileMin.y; tileY <= lightBounds.tileMax.y; ++tileY)
 		{
 			for (uint tileX = lightBounds.tileMin.x; tileX <= lightBounds.tileMax.x; ++tileX)
 			{
 				uint tileIndex = tileY * clusteredData.tileCountX + tileX;
+
+				// Volumetric cluster counts
+
+				for (uint sliceZ = lightBounds.sliceMin; sliceZ <= lightBounds.sliceMax; ++sliceZ)
+				{
+					uint clusterIndex = sliceZ * tileCount + tileIndex;
+					atomicAdd(volCountsBuf.counts[clusterIndex], 1u);
+				}
+
+				// Surface cluster counts
 
 				uvec2 tileSliceRange = tsrBuf.ranges[tileIndex];
 

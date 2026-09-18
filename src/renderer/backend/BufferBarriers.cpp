@@ -79,6 +79,27 @@ void BufferBarriers::ComputeWriteToRW(
 	vkCmdPipelineBarrier2(cmd, &di);
 }
 
+void BufferBarriers::ComputeStorageRW(VkCommandBuffer cmd)
+{
+	VkMemoryBarrier2 b{ VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+
+	b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+	b.srcAccessMask =
+		VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+		VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+
+	b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+	b.dstAccessMask =
+		VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+		VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+
+	VkDependencyInfo d{ VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+	d.memoryBarrierCount = 1;
+	d.pMemoryBarriers = &b;
+
+	vkCmdPipelineBarrier2(cmd, &d);
+}
+
 void BufferBarriers::ComputeWriteToTransferRead(
 	VkCommandBuffer cmd,
 	const AllocatedBuffer& buf)

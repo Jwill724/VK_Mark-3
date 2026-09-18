@@ -86,6 +86,17 @@ public:
 
 	void SetCheckpoint(VkCommandBuffer cmd, const char* marker) const;
 
+	bool AreDebugLabelsSupported() const noexcept { return pfn_vkCmdBeginDebugUtilsLabelEXT != nullptr; }
+	bool AreDebugLabelsEnabled()   const noexcept { return m_debugLabelsEnabled; }
+	void SetDebugLabelsEnabled(bool enabled) noexcept { m_debugLabelsEnabled = enabled; }
+
+	void BeginDebugLabel(VkCommandBuffer cmd, const char* name, const float rgba[4] = nullptr) const;
+	void EndDebugLabel(VkCommandBuffer cmd) const;
+	void InsertDebugLabel(VkCommandBuffer cmd, const char* name, const float rgba[4] = nullptr) const;
+
+	void BeginQueueLabel(VkQueue queue, const char* name, const float rgba[4] = nullptr) const;
+	void EndQueueLabel(VkQueue queue) const;
+
 	// -----------------------------
 	// Command buffer/pool creation
 	// -----------------------------
@@ -288,6 +299,27 @@ private:
 	uint32_t           m_markerFramesInFlight = 0;
 	uint32_t           m_markerPassesPerBatch = 0;
 
+	bool m_debugLabelsEnabled = true;
+
 	uint32_t MarkerSlot(QueueType qType, uint32_t frameIndex, uint32_t passIndex, bool end) const noexcept;
 	const char* MarkerName(QueueType qType, uint32_t value) const;
+};
+
+class ScopedDebugLabel
+{
+public:
+	ScopedDebugLabel(const Device& device, VkCommandBuffer cmd, const char* name, const float rgba[4] = nullptr)
+		: m_device(&device), m_cmd(cmd)
+	{
+		m_device->BeginDebugLabel(m_cmd, name, rgba);
+	}
+
+	ScopedDebugLabel(const ScopedDebugLabel&) = delete;
+	ScopedDebugLabel& operator=(const ScopedDebugLabel&) = delete;
+
+	~ScopedDebugLabel() { m_device->EndDebugLabel(m_cmd); }
+
+private:
+	const Device* m_device;
+	VkCommandBuffer m_cmd;
 };

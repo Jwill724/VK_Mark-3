@@ -4,6 +4,7 @@
 
 class Renderer;
 struct GLFWwindow;
+struct ImFont;
 
 class Editor
 {
@@ -24,12 +25,19 @@ public:
 	enum class SettingsCategory
 	{
 		Render,
+		SkyWeather,
 		Lighting,
 		PostFX,
 		Pipelines,
+		Debug,
+
 		Count
 	};
 
+	static ImFont* GetMonoFont() { return s_monoFont; }
+
 private:
 	VkDescriptorPool m_imguiPool = VK_NULL_HANDLE;
+
+	static ImFont* s_monoFont;
 };

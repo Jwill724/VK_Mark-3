@@ -41,18 +41,11 @@ namespace Engine
 void Engine::Run()
 {
 	_mainWindow.Init(DEFAULT_WIN_EXTENT_W, DEFAULT_WIN_EXTENT_H, "Mark_3");
-
 	InitBC7Encoder();
-
 	_jobSystem.Init();
 
-	_renderer.Init(
-		_mainWindow,
-		_jobSystem);
-
+	_renderer.Init(_mainWindow, _jobSystem);
 	_editor.InitImgui(_renderer, _mainWindow.GetWindowHandle());
-
-	_bIsInitialized = true;
 
 	_renderer.StartTimer();
 	_assetManager.LoadScenes(
@@ -64,6 +57,7 @@ void Engine::Run()
 		_jobSystem);
 
 	_jobSystem.Wait();
+	_bIsInitialized = true;
 
 	_renderer.UploadScenes(std::move(_pendingBatches));
 	_renderer.EndAssetTimer();
@@ -94,7 +88,16 @@ void Engine::Run()
 		_renderer.TickVramUsage();
 
 		if (_renderer.ShouldRenderImgui())
+		{
 			_editor.RenderImgui(_renderer);
+		}
+		else
+		{
+			ImGuiIO& io = ImGui::GetIO();
+			io.WantCaptureMouse = false;
+			io.WantCaptureKeyboard = false;
+			io.WantTextInput = false;
+		}
 
 		if (_renderer.PrepareFrame())
 		{

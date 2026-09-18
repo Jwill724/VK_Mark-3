@@ -46,12 +46,4 @@ RTShadeParams rtReflectParamsFromPush()
 	return p;
 }
 
-vec3 reflectFallbackIBL(vec3 N, vec3 V, float roughness)
-{
-	vec3 R = reflect(-V, N);
-	int levels = SampleCubeQueryLevels(rp.specularID);
-	float lod = clamp(roughness * float(levels - 1), 0.0, float(levels - 1));
-	return SampleCubeLod(rp.specularID, vec3(R.x, -R.y, R.z), lod).rgb;
-}
-
 #endif

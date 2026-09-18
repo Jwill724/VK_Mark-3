@@ -36,86 +36,89 @@ void BakeEnvironmentMaps(
 
 	PushDescriptorWriter pushWriter;
 
-	const auto skyboxSampler     = imageTable.GetSampler(RD::Renderer_Sampler::Skybox);
-	const auto specSampler       = imageTable.GetSampler(RD::Renderer_Sampler::Specular);
-	const auto equirectSampler   = imageTable.GetSampler(RD::Renderer_Sampler::Equirect);
-	const auto& brdf             = imageTable.GetStaticTexture(RD::Renderer_Texture::Brdf);
+	//const auto skyboxSampler     = imageTable.GetSampler(RD::Renderer_Sampler::Skybox);
+	//const auto specSampler       = imageTable.GetSampler(RD::Renderer_Sampler::Specular);
+	//const auto equirectSampler   = imageTable.GetSampler(RD::Renderer_Sampler::Equirect);
+	//const auto setCount = imageTable.EnvironmentSetCount();
 
-	const auto setCount = imageTable.EnvironmentSetCount();
+	//ShIrrPush shIrrPush;
+	//
+	//for (uint32_t i = 0; i < setCount; ++i)
+	//{
+	//	const auto& envSet = imageTable.GetEnvironmentSet(i);
+	//	ASSERT(envSet.IsValid());
 
-	BrdfPush brdfPush;
-	brdfPush.sampleCountU = RD::PREFILTER_SAMPLE_COUNT;
+	//	shIrrPush.setIndex = envSet.setIndex;
 
-	ShIrrPush shIrrPush;
+	//	ASSERT(shIrrPush.setIndex != UINT32_MAX);
 
-	for (uint32_t i = 0; i < setCount; ++i)
-	{
-		const auto& envSet = imageTable.GetEnvironmentSet(i);
-		ASSERT(envSet.IsValid());
+	//	auto& equirect   = envSet.equirect;
+	//	auto& specular   = envSet.specular;
+	//	auto& skybox     = envSet.skybox;
 
-		shIrrPush.setIndex = envSet.setIndex;
+	//	I::TransitionLayout(cmd, skybox,     RD::ImageAccess::Undefined,   RD::ImageAccess::Write);
+	//	I::TransitionLayout(cmd, specular,   RD::ImageAccess::Undefined,   RD::ImageAccess::Write);
 
-		ASSERT(shIrrPush.setIndex != UINT32_MAX);
+	//	// =========================
+	//	// HDR Equirect to cubemap
+	//	// =========================
 
-		auto& equirect   = envSet.equirect;
-		auto& specular   = envSet.specular;
-		auto& skybox     = envSet.skybox;
+	//	pso.SetPush(envSet.skyScale);
 
-		I::TransitionLayout(cmd, skybox,     RD::ImageAccess::Undefined,   RD::ImageAccess::Write);
-		I::TransitionLayout(cmd, specular,   RD::ImageAccess::Undefined,   RD::ImageAccess::Write);
+	//	pso.BindReadImage(pushWriter,  RD::PUSH_BINDING_READ_1,  equirect, equirectSampler);
+	//	pso.BindWriteImage(pushWriter, RD::PUSH_BINDING_WRITE_1, skybox, 0);
 
-		// =========================
-		// HDR Equirect to cubemap
-		// =========================
+	//	pso.UpdateExtent({ skybox.Width(), skybox.Height() });
+	//	pso.UpdateWorkgroups({ 16, 16, 6 });
 
-		pso.BindReadImage(pushWriter,  RD::PUSH_BINDING_READ_1,  equirect, equirectSampler);
-		pso.BindWriteImage(pushWriter, RD::PUSH_BINDING_WRITE_1, skybox, 0);
+	//	pso.DispatchComputePass(cmd, pipelines[PIPE_ID_HDR_CUBEMAP], pushWriter);
 
-		pso.UpdateExtent({ skybox.Width(), skybox.Height() });
-		pso.UpdateWorkgroups({ 16, 16, 6 });
+	//	I::TransitionLayout(cmd, skybox, RD::ImageAccess::Write, RD::ImageAccess::Read);
+	//	I::GenerateCubemapMipLevels(cmd, skybox);
 
-		pso.DispatchComputePass(cmd, pipelines[PIPE_ID_HDR_CUBEMAP], pushWriter);
+	//	// ======================
+	//	// SH Irradiance
+	//	// ======================
 
-		I::TransitionLayout(cmd, skybox, RD::ImageAccess::Write, RD::ImageAccess::Read);
-		I::GenerateCubemapMipLevels(cmd, skybox);
+	//	pso.BindReadImage(pushWriter, RD::PUSH_BINDING_READ_1,  skybox, skyboxSampler);
+	//	pso.SetPush(shIrrPush);
 
-		// ======================
-		// SH Irradiance
-		// ======================
+	//	pso.UpdateWorkgroups({ 64, 1, 1 });
+	//	pso.UpdateExtent({ 64u, 1u });
 
-		pso.BindReadImage(pushWriter, RD::PUSH_BINDING_READ_1,  skybox, skyboxSampler);
-		pso.SetPush(shIrrPush);
+	//	pso.DispatchComputePass(cmd, pipelines[PIPE_ID_SH_IRRADIANCE], pushWriter);
 
-		pso.UpdateWorkgroups({ 64, 1, 1 });
-		pso.UpdateExtent({ 64u, 1u });
+	//	pso.ClearPush();
 
-		pso.DispatchComputePass(cmd, pipelines[PIPE_ID_SH_IRRADIANCE], pushWriter);
+	//	// ========================
+	//	// Specular prefilter
+	//	// ========================
 
-		pso.ClearPush();
+	//	pso.UpdateWorkgroups({8, 8, 6});
+	//	for (uint32_t mip = 0; mip < specular.m_mipLevels; ++mip)
+	//	{
+	//		pso.BindReadImage(pushWriter,  RD::PUSH_BINDING_READ_1,  skybox,  skyboxSampler);
+	//		pso.BindWriteImage(pushWriter, RD::PUSH_BINDING_WRITE_1, specular, mip);
 
-		// ========================
-		// Specular prefilter
-		// ========================
+	//		pso.UpdateExtent({ envSet.specularPCs[mip].width, envSet.specularPCs[mip].height });
+	//		pso.SetPush(envSet.specularPCs[mip]);
 
-		pso.UpdateWorkgroups({8, 8, 6});
-		for (uint32_t mip = 0; mip < specular.m_mipLevels; ++mip)
-		{
-			pso.BindReadImage(pushWriter,  RD::PUSH_BINDING_READ_1,  skybox,  skyboxSampler);
-			pso.BindWriteImage(pushWriter, RD::PUSH_BINDING_WRITE_1, specular, mip);
+	//		pso.DispatchComputePass(cmd, pipelines[PIPE_ID_SPECULAR], pushWriter);
+	//	}
 
-			pso.UpdateExtent({ envSet.specularPCs[mip].width, envSet.specularPCs[mip].height });
-			pso.SetPush(envSet.specularPCs[mip]);
-
-			pso.DispatchComputePass(cmd, pipelines[PIPE_ID_SPECULAR], pushWriter);
-		}
-
-		I::TransitionLayout(cmd, specular, RD::ImageAccess::Write, RD::ImageAccess::Read);
-	}
+	//	I::TransitionLayout(cmd, specular, RD::ImageAccess::Write, RD::ImageAccess::Read);
+	//}
+	//
+	//pso.ClearPush();
 
 	// ======================
 	// BRDF LUT
 	// ======================
-	pso.ClearPush();
+
+	const auto& brdf = imageTable.GetStaticTexture(RD::Renderer_Texture::Brdf);
+	BrdfPush brdfPush;
+	brdfPush.sampleCountU = RD::PREFILTER_SAMPLE_COUNT;
+
 	I::TransitionLayout(cmd, brdf, RD::ImageAccess::Undefined, RD::ImageAccess::Write);
 
 	pso.BindWriteImage(pushWriter, RD::PUSH_BINDING_WRITE_1, brdf);

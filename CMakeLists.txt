@@ -451,42 +451,6 @@ target_link_libraries(
 )
 
 # ============================================================
-# Shader compilation
-# ============================================================
-
-set(
-    SHADER_BUILD_SCRIPT
-    "${PROJECT_SOURCE_DIR}/res/shaders/compile_shaders.bat"
-)
-
-if(NOT EXISTS "${SHADER_BUILD_SCRIPT}")
-    message(FATAL_ERROR
-        "Shader compilation script not found: "
-        "${SHADER_BUILD_SCRIPT}"
-    )
-endif()
-
-add_custom_target(
-    CompileShaders
-
-    COMMAND
-        cmd /C call "${SHADER_BUILD_SCRIPT}"
-
-    WORKING_DIRECTORY
-        "${PROJECT_SOURCE_DIR}/res/shaders"
-
-    COMMENT
-        "Compiling VK-Mark-3 shaders..."
-
-    VERBATIM
-)
-
-add_dependencies(
-    VulkanRenderer
-    CompileShaders
-)
-
-# ============================================================
 # Visual Studio organization
 # ============================================================
 

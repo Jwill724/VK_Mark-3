@@ -1,4 +1,4 @@
-#version 450
+#version 460
 #extension GL_GOOGLE_include_directive : require
 #extension GL_ARB_separate_shader_objects : require
 
@@ -22,15 +22,16 @@ void main()
 	ivec2 srcRes = (ivec2(scene.renderExtentSize.xy) + 1) / 2;
 	ivec2 base   = dst * SHADING_TILE;
 
-	vec2 sum = vec2(0.0);
+	vec3 sum = vec3(0.0);
 
 	for (int y = 0; y < SHADING_TILE; ++y) {
 		for (int x = 0; x < SHADING_TILE; ++x) {
-			ivec2 t = min(base + ivec2(x, y), srcRes - 1);
-			vec2  s = texelFetch(inShadingHalf, t, 0).rg;
-			sum += (any(isnan(s)) || any(isinf(s))) ? vec2(0.0) : max(s, vec2(0.0));
+			ivec2 t = base + ivec2(x, y);
+			if (any(greaterThanEqual(t, srcRes))) continue;
+			vec3 s = texelFetch(inShadingHalf, t, 0).rgb;
+			sum += (any(isnan(s)) || any(isinf(s))) ? vec3(0.0) : max(s, vec3(0.0));
 		}
 	}
 
-	imageStore(outShadingLow, dst, vec4(sum / float(SHADING_TILE * SHADING_TILE), 0.0, 0.0));
+	imageStore(outShadingLow, dst, vec4(sum / float(SHADING_TILE * SHADING_TILE), 0.0));
 }

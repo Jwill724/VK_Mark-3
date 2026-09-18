@@ -1,4 +1,4 @@
-#version 450
+#version 460
 
 #extension GL_GOOGLE_include_directive    : require
 #extension GL_ARB_separate_shader_objects : require
@@ -9,60 +9,130 @@
 layout(local_size_x = 256) in;
 
 shared uint sharedCounts[256];
+shared uint sharedVolCounts[256];
+
 shared uint sharedBlockBaseOffset;
+shared uint sharedVolBlockBaseOffset;
 
 void main()
 {
 	uint clusterIndex = gl_GlobalInvocationID.x;
-	uint localIndex = gl_LocalInvocationIndex;
+	uint localIndex   = gl_LocalInvocationIndex;
 
 	ClusteredData clustered = getClusteredData();
-	SceneData scene = getSceneData();
 
-	ClusterCounts countsBuf = getClusterCountsBuffer();
+	ClusterCounts       countsBuf     = getClusterCountsBuffer();
+	ClusterOffsets      offsetsBuf    = getClusterOffsetsBuffer();
 
-	ClusterOffsets offsetsBuf = getClusterOffsetsBuffer();
+	VolClusterCounts    volCountsBuf  = getVolClusterCountsBuffer();
+	VolClusterOffsets   volOffsetsBuf = getVolClusterOffsetsBuffer();
 
 	ClusterScanScratch scratchBuf = getClusterScratchBuffer();
 
-	// Load + clamp count
-	uint countValue = 0u;
-	if (clusterIndex < clusteredData.clusterCount) {
-		countValue = countsBuf.counts[clusterIndex];
-		countValue = min(countValue, clusteredData.maxLightsPerCluster);
+	// -------------------------------------------------------------------------
+	// Load + clamp surface and volumetric cluster counts
+	// -------------------------------------------------------------------------
+
+
+	uint countValue    = 0u;
+	uint volCountValue = 0u;
+
+	if (clusterIndex < clustered.clusterCount)
+	{
+		countValue = min(
+			countsBuf.counts[clusterIndex],
+			clustered.maxLightsPerCluster);
+
+		volCountValue = min(
+			volCountsBuf.counts[clusterIndex],
+			clustered.maxLightsPerCluster);
 	}
 
-	sharedCounts[localIndex] = countValue;
+	sharedCounts[localIndex]    = countValue;
+	sharedVolCounts[localIndex] = volCountValue;
+
 	barrier();
 
-	// Inclusive scan (Hillis–Steele)
-	for (uint stride = 1u; stride < 256u; stride <<= 1u) {
+	// -------------------------------------------------------------------------
+	// Inclusive scans (Hillis-Steele)
+	// -------------------------------------------------------------------------
 
-		uint addValue = 0u;
+
+	for (uint stride = 1u; stride < 256u; stride <<= 1u)
+	{
+		uint addValue    = 0u;
+		uint volAddValue = 0u;
 
 		barrier();
-		if (localIndex >= stride) {
-			addValue = sharedCounts[localIndex - stride];
+
+		if (localIndex >= stride)
+		{
+			addValue    = sharedCounts[localIndex - stride];
+			volAddValue = sharedVolCounts[localIndex - stride];
 		}
+
 		barrier();
 
-		sharedCounts[localIndex] += addValue;
+		sharedCounts[localIndex]    += addValue;
+		sharedVolCounts[localIndex] += volAddValue;
+
 		barrier();
 	}
 
-	uint inclusivePrefix = sharedCounts[localIndex];
-	uint exclusivePrefix = inclusivePrefix - countValue;
+	// -------------------------------------------------------------------------
+	// Convert inclusive -> exclusive offsets
+	// -------------------------------------------------------------------------
 
-	uint blockSum = sharedCounts[255];
 
-	if (localIndex == 0u) {
-		sharedBlockBaseOffset = atomicAdd(scratchBuf.scratch[0], blockSum);
+	uint inclusivePrefix    = sharedCounts[localIndex];
+	uint volInclusivePrefix = sharedVolCounts[localIndex];
+
+	uint exclusivePrefix =
+		inclusivePrefix - countValue;
+
+	uint volExclusivePrefix =
+		volInclusivePrefix - volCountValue;
+
+	// Final lane contains total number of light IDs required by this workgroup.
+
+	uint blockSum    = sharedCounts[255];
+	uint volBlockSum = sharedVolCounts[255];
+
+	// -------------------------------------------------------------------------
+	// Allocate global ID ranges for this workgroup.
+	//
+	// scratch[0] = surface light-ID allocation cursor
+	// scratch[1] = volumetric light-ID allocation cursor
+	// -------------------------------------------------------------------------
+
+
+	if (localIndex == 0u)
+	{
+		sharedBlockBaseOffset =
+			atomicAdd(scratchBuf.scratch[0], blockSum);
+
+		sharedVolBlockBaseOffset =
+			atomicAdd(scratchBuf.scratch[1], volBlockSum);
 	}
 
 	barrier();
 
-	if (clusterIndex < clusteredData.clusterCount) {
+	// -------------------------------------------------------------------------
+	// Store clamped counts + final offsets
+	// -------------------------------------------------------------------------
+
+
+	if (clusterIndex < clustered.clusterCount)
+	{
 		countsBuf.counts[clusterIndex] = countValue;
-		offsetsBuf.offsets[clusterIndex] = sharedBlockBaseOffset + exclusivePrefix;
+
+		offsetsBuf.offsets[clusterIndex] =
+			sharedBlockBaseOffset + exclusivePrefix;
+
+
+		volCountsBuf.counts[clusterIndex] = volCountValue;
+
+		volOffsetsBuf.offsets[clusterIndex] =
+			sharedVolBlockBaseOffset + volExclusivePrefix;
 	}
 }

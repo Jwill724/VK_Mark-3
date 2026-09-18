@@ -7,16 +7,15 @@ const uint DBG_ALBEDO         = 1u;
 const uint DBG_NORMALS        = 2u;
 const uint DBG_ROUGHNESS      = 3u;
 const uint DBG_METALLIC       = 4u;
-const uint DBG_EMISSIVE       = 5u;
-const uint DBG_SSAO           = 6u;
-const uint DBG_SS_SHADOWS     = 7u;
-const uint DBG_CASCADES       = 8u;
-const uint DBG_VIS_INSTANCE   = 9u;
-const uint DBG_VIS_TRIANGLE   = 10u;
-const uint DBG_VIS_LOD        = 11u;
-const uint DBG_MESHLETS       = 12u;
-//const uint DBG_MESHLET_FACING = 13u;
-const uint DBG_COUNT          = 13u;
+const uint DBG_SSAO           = 5u;
+const uint DBG_SS_SHADOWS     = 6u;
+const uint DBG_CASCADES       = 7u;
+const uint DBG_VIS_INSTANCE   = 8u;
+const uint DBG_VIS_TRIANGLE   = 9u;
+const uint DBG_VIS_LOD        = 10u;
+const uint DBG_MESHLETS       = 11u;
+//const uint DBG_MESHLET_FACING = 12u;
+const uint DBG_COUNT          = 12u;
 
 #define DBG_BIT(v) (1u << (v))
 

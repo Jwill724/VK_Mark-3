@@ -1196,3 +1196,64 @@ void Device::DumpDeviceState(const char* context) const
 	ReportMemoryBudget(context);
 	fmt::println("=======================================");
 }
+
+// =============
+// Debug Labels
+// =============
+
+static void FillLabel(VkDebugUtilsLabelEXT& label, const char* name, const float rgba[4])
+{
+	label = VkDebugUtilsLabelEXT{ VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT };
+	label.pLabelName = name;
+
+	if (rgba)
+		std::memcpy(label.color, rgba, sizeof(float) * 4);
+	else
+		label.color[3] = 1.0f;
+}
+
+void Device::BeginDebugLabel(VkCommandBuffer cmd, const char* name, const float rgba[4]) const
+{
+	if (!m_debugLabelsEnabled || !pfn_vkCmdBeginDebugUtilsLabelEXT) return;
+	if (cmd == VK_NULL_HANDLE || name == nullptr) return;
+
+	VkDebugUtilsLabelEXT label;
+	FillLabel(label, name, rgba);
+	vkCmdBeginDebugUtilsLabelEXT(cmd, &label);
+}
+
+void Device::EndDebugLabel(VkCommandBuffer cmd) const
+{
+	if (!m_debugLabelsEnabled || !pfn_vkCmdEndDebugUtilsLabelEXT) return;
+	if (cmd == VK_NULL_HANDLE) return;
+
+	vkCmdEndDebugUtilsLabelEXT(cmd);
+}
+
+void Device::InsertDebugLabel(VkCommandBuffer cmd, const char* name, const float rgba[4]) const
+{
+	if (!m_debugLabelsEnabled || !pfn_vkCmdInsertDebugUtilsLabelEXT) return;
+	if (cmd == VK_NULL_HANDLE || name == nullptr) return;
+
+	VkDebugUtilsLabelEXT label;
+	FillLabel(label, name, rgba);
+	vkCmdInsertDebugUtilsLabelEXT(cmd, &label);
+}
+
+void Device::BeginQueueLabel(VkQueue queue, const char* name, const float rgba[4]) const
+{
+	if (!m_debugLabelsEnabled || !pfn_vkQueueBeginDebugUtilsLabelEXT) return;
+	if (queue == VK_NULL_HANDLE || name == nullptr) return;
+
+	VkDebugUtilsLabelEXT label;
+	FillLabel(label, name, rgba);
+	pfn_vkQueueBeginDebugUtilsLabelEXT(queue, &label);
+}
+
+void Device::EndQueueLabel(VkQueue queue) const
+{
+	if (!m_debugLabelsEnabled || !pfn_vkQueueEndDebugUtilsLabelEXT) return;
+	if (queue == VK_NULL_HANDLE) return;
+
+	pfn_vkQueueEndDebugUtilsLabelEXT(queue);
+}

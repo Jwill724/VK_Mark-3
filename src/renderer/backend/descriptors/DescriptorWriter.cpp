@@ -148,39 +148,49 @@ void PushDescriptorWriter::UpdatePushLayout(
 void DescriptorWriter::WriteBuffer(
 	uint32_t binding,
 	const AllocatedBuffer& buffer,
-	VkDescriptorSet set)
+	VkDescriptorSet set,
+	VkDescriptorType type)
 {
-	const size_t bufferIndex = m_bufferInfos.size();
+	ASSERT(buffer.m_buffer != VK_NULL_HANDLE);
 	ASSERT(buffer.m_bytesSize != 0);
+	ASSERT(set != VK_NULL_HANDLE);
 
-	m_bufferInfos.emplace_back(buffer.m_buffer, 0, buffer.m_bytesSize);
-
-	VkDescriptorType bufferType{};
-	switch(binding)
+	if (type == VK_DESCRIPTOR_TYPE_MAX_ENUM)
 	{
+		switch (binding)
+		{
 		case RD::ADDRESS_TABLE_BINDING:
-			bufferType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+			type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 			break;
 
 		case RD::FRAME_BINDING_SCENE:
 		case RD::FRAME_BINDING_CSM:
 		case RD::FRAME_BINDING_VOLUMETRIC:
 		case RD::FRAME_BINDING_CLUSTERED:
-			bufferType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 			break;
 
 		default:
-			ASSERT(false && "Invalid buffer binding added.");
+			ASSERT(false && "Specify the buffer descriptor type.");
+			return;
+		}
 	}
 
+	const size_t bufferIndex = m_bufferInfos.size();
+
+	m_bufferInfos.emplace_back(
+		buffer.m_buffer,
+		0,
+		buffer.m_bytesSize);
+
 	m_bufferWrites.emplace_back(VkWriteDescriptorSet{
-		.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-		.dstSet          = set,
-		.dstBinding      = binding,
+		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		.dstSet = set,
+		.dstBinding = binding,
 		.descriptorCount = 1u,
-		.descriptorType  = bufferType,
-		.pBufferInfo     = nullptr,
-	});
+		.descriptorType = type,
+		.pBufferInfo = nullptr,
+		});
 
 	m_writeBufferIndices.push_back(bufferIndex);
 }

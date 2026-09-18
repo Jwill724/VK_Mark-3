@@ -79,35 +79,39 @@ AllocatedBuffer Allocator::AllocateGPUBuffer(
 	size_t size)
 {
 	BufferDesc desc{};
-	desc.size          = size;
-	desc.usage         = Vulkan_BufferUsage::BDA_POINTER;
-	desc.heap          = HeapType::GPU_Local;
+	desc.size = size;
+	desc.usage = Vulkan_BufferUsage::BDA_POINTER;
+	desc.heap = HeapType::GPU_Local;
 	desc.bIsConcurrent = true;
 	//desc.debugName     = "Generic_Buffer";
 
 	switch (slot)
 	{
-		case RD::Renderer_Buffer::IndirectDrawCounts:
-		case RD::Renderer_Buffer::DispatchIndirectArgs:
-		case RD::Renderer_Buffer::TaskDispatch:
-		case RD::Renderer_Buffer::DebugDraw:
-		case RD::Renderer_Buffer::RTRayList:
-			desc.usage = Vulkan_BufferUsage::INDIRECT;
-			break;
-		case RD::Renderer_Buffer::Vertex:
-		case RD::Renderer_Buffer::DebugVertex:
-		case RD::Renderer_Buffer::MeshletVertices:
-			desc.usage = Vulkan_BufferUsage::VERTEX;
-			break;
-		case RD::Renderer_Buffer::Index:
-			desc.usage = Vulkan_BufferUsage::INDEX;
-			break;
-		case RD::Renderer_Buffer::DrawStats:
-			desc.usage = Vulkan_BufferUsage::BDA_SRC_COPY;
-			break;
-		case RD::Renderer_Buffer::RTInstances:
-			desc.usage = Vulkan_BufferUsage::AS_BUILD_INPUT;
-			break;
+	case RD::Renderer_Buffer::WorldProbeFrameInfo:
+		desc.heap = HeapType::Upload;
+		break;
+	case RD::Renderer_Buffer::WorldProbeSchedule:
+	case RD::Renderer_Buffer::IndirectDrawCounts:
+	case RD::Renderer_Buffer::DispatchIndirectArgs:
+	case RD::Renderer_Buffer::TaskDispatch:
+	case RD::Renderer_Buffer::DebugDraw:
+	case RD::Renderer_Buffer::RTRayList:
+		desc.usage = Vulkan_BufferUsage::INDIRECT;
+		break;
+	case RD::Renderer_Buffer::Vertex:
+	case RD::Renderer_Buffer::DebugVertex:
+	case RD::Renderer_Buffer::MeshletVertices:
+		desc.usage = Vulkan_BufferUsage::VERTEX;
+		break;
+	case RD::Renderer_Buffer::Index:
+		desc.usage = Vulkan_BufferUsage::INDEX;
+		break;
+	case RD::Renderer_Buffer::DrawStats:
+		desc.usage = Vulkan_BufferUsage::BDA_SRC_COPY;
+		break;
+	case RD::Renderer_Buffer::RTInstances:
+		desc.usage = Vulkan_BufferUsage::AS_BUILD_INPUT;
+		break;
 	}
 
 	return AllocateBuffer(desc);
@@ -116,9 +120,9 @@ AllocatedBuffer Allocator::AllocateGPUBuffer(
 AllocatedBuffer Allocator::AllocateUniformRaw(const void* data, size_t size)
 {
 	BufferDesc desc{};
-	desc.size  = size;
+	desc.size = size;
 	desc.usage = Vulkan_BufferUsage::UNIFORM;
-	desc.heap  = HeapType::Upload;
+	desc.heap = HeapType::Upload;
 
 	AllocatedBuffer buf = AllocateBuffer(desc);
 	memcpy(buf.m_mappedPtr, data, size);
@@ -154,8 +158,8 @@ AllocatedBuffer Allocator::AllocateBuffer(const BufferDesc& desc)
 	if (desc.bIsConcurrent)
 	{
 		const uint32_t g = m_deviceCtx.queueIndices.graphicsFamily.value();
-		const uint32_t t =  m_deviceCtx.queueIndices.transferFamily.value();
-		const uint32_t c=  m_deviceCtx.queueIndices.computeFamily.value();
+		const uint32_t t = m_deviceCtx.queueIndices.transferFamily.value();
+		const uint32_t c = m_deviceCtx.queueIndices.computeFamily.value();
 
 		auto PushUnique = [&](uint32_t fam, uint8_t bit) {
 			for (uint32_t i = 0; i < qFamCount; ++i)
@@ -164,7 +168,7 @@ AllocatedBuffer Allocator::AllocateBuffer(const BufferDesc& desc)
 			}
 			qFamilies[qFamCount++] = fam;
 			mask |= bit;
-		};
+			};
 
 		PushUnique(g, 0x1);
 		PushUnique(t, 0x2);
@@ -223,23 +227,23 @@ static constexpr VkImageAspectFlags GetAspectMaskFromFormat(VkFormat format)
 	switch (format)
 	{
 		// Depth only
-		case VK_FORMAT_D16_UNORM:
-		case VK_FORMAT_X8_D24_UNORM_PACK32:
-		case VK_FORMAT_D32_SFLOAT:
-			return VK_IMAGE_ASPECT_DEPTH_BIT;
+	case VK_FORMAT_D16_UNORM:
+	case VK_FORMAT_X8_D24_UNORM_PACK32:
+	case VK_FORMAT_D32_SFLOAT:
+		return VK_IMAGE_ASPECT_DEPTH_BIT;
 
 		// Stencil only
-		case VK_FORMAT_S8_UINT:
-			return VK_IMAGE_ASPECT_STENCIL_BIT;
+	case VK_FORMAT_S8_UINT:
+		return VK_IMAGE_ASPECT_STENCIL_BIT;
 
 		// Depth + stencil
-		case VK_FORMAT_D16_UNORM_S8_UINT:
-		case VK_FORMAT_D24_UNORM_S8_UINT:
-		case VK_FORMAT_D32_SFLOAT_S8_UINT:
-			return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+	case VK_FORMAT_D16_UNORM_S8_UINT:
+	case VK_FORMAT_D24_UNORM_S8_UINT:
+	case VK_FORMAT_D32_SFLOAT_S8_UINT:
+		return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
 
-		default:
-			return VK_IMAGE_ASPECT_COLOR_BIT;
+	default:
+		return VK_IMAGE_ASPECT_COLOR_BIT;
 	}
 }
 
@@ -247,23 +251,23 @@ AllocatedImage Allocator::AllocateImage(const ImageDesc& desc) const
 {
 	AllocatedImage newImage;
 	newImage.m_extent = desc.extent;
-	newImage.m_name   = desc.debugName;
+	newImage.m_name = desc.debugName;
 
 	VkExtent3D vkExtent = { newImage.m_extent.Width(), newImage.m_extent.Height(), newImage.m_extent.Depth() };
 
-	auto imgFormat        = static_cast<VkFormat>(desc.format);
+	auto imgFormat = static_cast<VkFormat>(desc.format);
 	newImage.m_pixelBytes = static_cast<uint32_t>(ImageUtils::GetPixelSize(imgFormat));
-	auto bufUsage         = static_cast<VkImageUsageFlags>(desc.usage);
+	auto bufUsage = static_cast<VkImageUsageFlags>(desc.usage);
 
 	VkImageCreateInfo imgInfo{};
-	imgInfo.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-	imgInfo.imageType     = desc.imageType;
-	imgInfo.extent        = vkExtent;
-	imgInfo.format        = imgFormat;
-	imgInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
-	imgInfo.usage         = bufUsage;
-	imgInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
-	imgInfo.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+	imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+	imgInfo.imageType = desc.imageType;
+	imgInfo.extent = vkExtent;
+	imgInfo.format = imgFormat;
+	imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+	imgInfo.usage = bufUsage;
+	imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+	imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
 	std::array<uint32_t, 2> qFamilies{};
@@ -288,15 +292,15 @@ AllocatedImage Allocator::AllocateImage(const ImageDesc& desc) const
 	// auto compute mip levels
 	if (desc.mipLevels == 0)
 	{
-		imgInfo.mipLevels       = ImageUtils::CalculateMipLevels(newImage.Width(), newImage.Height());
-		newImage.m_mipLevels    = imgInfo.mipLevels;
+		imgInfo.mipLevels = ImageUtils::CalculateMipLevels(newImage.Width(), newImage.Height());
+		newImage.m_mipLevels = imgInfo.mipLevels;
 		newImage.m_bIsMipmapped = true;
 	}
 	// mip count already predefined
 	else if (desc.mipLevels > 1)
 	{
-		imgInfo.mipLevels       = desc.mipLevels;
-		newImage.m_mipLevels    = desc.mipLevels;
+		imgInfo.mipLevels = desc.mipLevels;
+		newImage.m_mipLevels = desc.mipLevels;
 		newImage.m_bIsMipmapped = true;
 	}
 
@@ -308,18 +312,18 @@ AllocatedImage Allocator::AllocateImage(const ImageDesc& desc) const
 
 	if (newImage.m_bIsCubemap)
 	{
-		imgInfo.flags         |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
-		imgInfo.arrayLayers    = 6;
+		imgInfo.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+		imgInfo.arrayLayers = 6;
 		newImage.m_arrayLayers = 6;
 	}
 	else if (desc.arrayLayers > 1)
 	{
-		imgInfo.arrayLayers    = desc.arrayLayers;
+		imgInfo.arrayLayers = desc.arrayLayers;
 		newImage.m_arrayLayers = desc.arrayLayers;
 	}
 
 	VmaAllocationCreateInfo imgAllocInfo{};
-	imgAllocInfo.usage         = VMA_MEMORY_USAGE_GPU_ONLY;
+	imgAllocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 	imgAllocInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
 	VK_CHECK(vmaCreateImage(m_vmaAlloc, &imgInfo, &imgAllocInfo, &newImage.m_image, &newImage.m_allocation, nullptr));
@@ -328,14 +332,14 @@ AllocatedImage Allocator::AllocateImage(const ImageDesc& desc) const
 
 	// sampled view creation
 	VkImageViewCreateInfo viewInfo{};
-	viewInfo.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-	viewInfo.image                           = newImage.m_image;
-	viewInfo.format                          = imgFormat;
-	viewInfo.subresourceRange.aspectMask     = aspectMask;
-	viewInfo.subresourceRange.baseMipLevel   = 0;
-	viewInfo.subresourceRange.levelCount     = imgInfo.mipLevels;
+	viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+	viewInfo.image = newImage.m_image;
+	viewInfo.format = imgFormat;
+	viewInfo.subresourceRange.aspectMask = aspectMask;
+	viewInfo.subresourceRange.baseMipLevel = 0;
+	viewInfo.subresourceRange.levelCount = imgInfo.mipLevels;
 	viewInfo.subresourceRange.baseArrayLayer = 0;
-	viewInfo.subresourceRange.layerCount     = newImage.m_arrayLayers;
+	viewInfo.subresourceRange.layerCount = newImage.m_arrayLayers;
 
 	VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
 	if (desc.imageType & VK_IMAGE_TYPE_3D)
@@ -362,18 +366,18 @@ AllocatedImage Allocator::AllocateImage(const ImageDesc& desc) const
 
 			for (uint32_t mip = 0; mip < imgInfo.mipLevels; ++mip)
 			{
-				VkImageViewCreateInfo mipViewInfo         = viewInfo;
+				VkImageViewCreateInfo mipViewInfo = viewInfo;
 				mipViewInfo.subresourceRange.baseMipLevel = mip;
-				mipViewInfo.subresourceRange.levelCount   = 1;
+				mipViewInfo.subresourceRange.levelCount = 1;
 
 				if (newImage.m_bIsCubemap)
 				{
-					mipViewInfo.viewType                    = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+					mipViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
 					mipViewInfo.subresourceRange.layerCount = 6;
 				}
 				else
 				{
-					mipViewInfo.viewType                    = VK_IMAGE_VIEW_TYPE_2D;
+					mipViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
 					mipViewInfo.subresourceRange.layerCount = 1;
 				}
 
@@ -388,7 +392,7 @@ AllocatedImage Allocator::AllocateImage(const ImageDesc& desc) const
 			VkImageViewCreateInfo storageViewInfo = viewInfo;
 			storageViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
 			storageViewInfo.subresourceRange.baseMipLevel = 0;
-			storageViewInfo.subresourceRange.levelCount   = 1;
+			storageViewInfo.subresourceRange.levelCount = 1;
 
 			VK_CHECK(vkCreateImageView(m_deviceCtx.device, &storageViewInfo, nullptr, &newImage.m_vStorageViews[0]));
 		}
@@ -424,38 +428,38 @@ size_t Allocator::CalcBaseGlobalStagingSize(const BindlessImageTable& imageTable
 	// ---------------------------
 	total += imageTable.CalcStaticTexturesStagingSize();
 
-	// ---------------------------
-	// 2. Equirect HDR textures
-	// ---------------------------
-	// We must match UploadEquirects() exactly:
-	// - RGBA32F = 16 bytes per pixel
-	// - layers = 1
-	// - mip = 0 upload (single level)
-	for (const auto& envSet : imageTable.GetEnvironmentSetSpan())
-	{
-		if (!envSet.IsValid()) continue;
+	//// ---------------------------
+	//// 2. Equirect HDR textures
+	//// ---------------------------
+	//// We must match UploadEquirects() exactly:
+	//// - RGBA32F = 16 bytes per pixel
+	//// - layers = 1
+	//// - mip = 0 upload (single level)
+	//for (const auto& envSet : imageTable.GetEnvironmentSetSpan())
+	//{
+	//	if (!envSet.IsValid()) continue;
 
-		if (!envSet.equirect.IsValid()) continue;
+	//	if (!envSet.equirect.IsValid()) continue;
 
-		const uint32_t width  = envSet.equirect.Width();
-		const uint32_t height = envSet.equirect.Height();
+	//	const uint32_t width  = envSet.equirect.Width();
+	//	const uint32_t height = envSet.equirect.Height();
 
-		const uint32_t depth  = 1u;
-		const uint32_t layers = 1u;
+	//	const uint32_t depth  = 1u;
+	//	const uint32_t layers = 1u;
 
-		const size_t pixelBytes = envSet.equirect.m_pixelBytes;
+	//	const size_t pixelBytes = envSet.equirect.m_pixelBytes;
 
-		const size_t rawSize =
-			static_cast<size_t>(width) *
-			static_cast<size_t>(height) *
-			static_cast<size_t>(depth) *
-			static_cast<size_t>(layers) *
-			pixelBytes;
+	//	const size_t rawSize =
+	//		static_cast<size_t>(width) *
+	//		static_cast<size_t>(height) *
+	//		static_cast<size_t>(depth) *
+	//		static_cast<size_t>(layers) *
+	//		pixelBytes;
 
-		const size_t paddedSize = AllocatedBuffer::AlignUp(rawSize, 4u);
+	//	const size_t paddedSize = AllocatedBuffer::AlignUp(rawSize, 4u);
 
-		total += paddedSize;
-	}
+	//	total += paddedSize;
+	//}
 
 	// ----------------------------
 	// 3. Safety floor for buffers
@@ -471,14 +475,14 @@ VmaMemoryUsage HeapTypeToVma(HeapType heap) noexcept
 {
 	switch (heap)
 	{
-		case HeapType::GPU_Local:
-			return VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-		case HeapType::Upload:
-		case HeapType::Readback:
-		case HeapType::Staging:
-			 return VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-		default:
-			return VMA_MEMORY_USAGE_AUTO;
+	case HeapType::GPU_Local:
+		return VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+	case HeapType::Upload:
+	case HeapType::Readback:
+	case HeapType::Staging:
+		return VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+	default:
+		return VMA_MEMORY_USAGE_AUTO;
 	}
 }
 
@@ -488,16 +492,16 @@ VmaAllocationCreateFlags HeapTypeToVmaFlags(HeapType heap, size_t size) noexcept
 
 	switch (heap)
 	{
-		case HeapType::Upload:
-		case HeapType::Staging:
-			flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-			break;
-		case HeapType::Readback:
-			flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
-			break;
-		case HeapType::GPU_Local:
-			flags |= VMA_ALLOCATION_CREATE_STRATEGY_MIN_MEMORY_BIT;
-			break;
+	case HeapType::Upload:
+	case HeapType::Staging:
+		flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+		break;
+	case HeapType::Readback:
+		flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+		break;
+	case HeapType::GPU_Local:
+		flags |= VMA_ALLOCATION_CREATE_STRATEGY_MIN_MEMORY_BIT;
+		break;
 	}
 
 	if (size >= (512 * 1024))

@@ -1,9 +1,10 @@
-#version 450
+#version 460
 
 #extension GL_GOOGLE_include_directive : require
 #extension GL_ARB_separate_shader_objects : require
 
 #include "../include/common.glsl"
+#include "../include/ssgi_push.glsl"
 
 // Original XE_GTAO implementation
 // https://github.com/GameTechDev/XeGTAO/blob/master/Source/Rendering/Shaders/XeGTAO.hlsli
@@ -16,29 +17,6 @@ layout(set = PUSH_SET, binding = PUSH_BINDING_READ_1) uniform sampler2D rawAO;
 layout(set = PUSH_SET, binding = PUSH_BINDING_READ_2) uniform sampler2D edgeInfo;
 layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1) writeonly uniform image2D aoFiltered;
 layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_2, rgba8) uniform image2D bentNormals;
-
-layout(push_constant) uniform PushConstantData {
-	float effectRadius;
-	float effectFalloffRange;
-
-	vec2  ndcToViewMul_x_PixelSize;
-
-	float radiusMultiplier;
-	float sampleDistributionPower;
-
-	uint noiseIndex;
-	uint hilbertLutID;
-
-	float denoiseBlurBeta;
-	uint  isFinalPass;
-
-	float upsampleDepthSigma;
-	float giClampMax;
-	float giReprojTolerance;
-
-	float giTemporalAlpha;
-	float giFallbackStrength;
-} pc;
 
 void addSample(float val, float edgeWeight, inout float sum, inout float sumWeight) {
 	sum       += edgeWeight * val;

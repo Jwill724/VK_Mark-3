@@ -1,0 +1,47 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "../include/common.glsl"
+#include "../include/atmosphere_lighting.glsl"
+#include "../include/world_probe_cache_common.glsl"
+
+layout(local_size_x = 1) in;
+
+layout(push_constant) uniform WorldProbeCachePush
+{
+	uint flags;
+	uint pad0;
+	uint pad1;
+	uint pad2;
+} pc;
+
+layout(buffer_reference, scalar) buffer WPSpatialCacheWritable
+{
+	mat4 viewProjection;
+	mat4 inverseViewProjection;
+	mat4 view;
+	vec4 cameraPosition;
+	vec4 depthBias;
+	vec4 fallbackSky;
+	uvec4 options;
+};
+
+void main()
+{
+	if (any(notEqual(gl_GlobalInvocationID, uvec3(0)))) return;
+	vec3 sky = (
+		atmosphereDiffuseIrradiance(vec3( 1,  0,  0)) +
+		atmosphereDiffuseIrradiance(vec3(-1,  0,  0)) +
+		atmosphereDiffuseIrradiance(vec3( 0,  1,  0)) +
+		atmosphereDiffuseIrradiance(vec3( 0, -1,  0)) +
+		atmosphereDiffuseIrradiance(vec3( 0,  0,  1)) +
+		atmosphereDiffuseIrradiance(vec3( 0,  0, -1))
+	) * (1.0 / (6.0 * PI));
+	WPSpatialCacheWritable info = WPSpatialCacheWritable(
+		getABTFrameAddress(ABT_WorldProbeCacheInfo));
+	info.fallbackSky = vec4(max(sky, vec3(0)), 0);
+
+	// Publish the producer mode to fog and transparent consumers. This avoids
+	// a second CPU settings path that could disagree with the pushed flags.
+	info.options.x = pc.flags & 3u;
+}

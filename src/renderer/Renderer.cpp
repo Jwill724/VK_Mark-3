@@ -7,6 +7,7 @@
 #include "backend/descriptors/DescriptorManager.h"
 #include "backend/PhysicalDeviceSelector.h"
 #include "backend/BufferBarriers.h"
+#include "backend/ImageUtils.h"
 #include "rendergraph/RenderPasses.h"
 #include "scene/World.h"
 #include "scene/LightingSystem.h"
@@ -31,12 +32,6 @@
 
 #endif
 
-// TODO: List of shit that must get fixed.
-// - TAA jitter on thin and edge geometry, influenced most with higher luminance.
-//   Appears in transparent rendering and volumetrics passing through edges of geometry will jitter bad.
-//   The jitter doesn't seem to fully adhere to the frame rate but jitter just becomes a bit slower/smoother at high fps.
-//   Some mild ghosting with dynamic objects and some materials will have aliasing in motion, likely due to mip bias.
-
 static_assert(sizeof(InstanceInput)   == SIZEOF_INSTANCE_INPUT);
 static_assert(sizeof(DrawBin)         == SIZEOF_DRAW_BIN);
 static_assert(sizeof(VkAccelerationStructureInstanceKHR) == SIZEOF_RT_INSTANCE);
@@ -50,6 +45,11 @@ inline constexpr bool rtReflectionsOn       = true;
 inline constexpr bool ScreenSpaceShadowsOn  = true;
 inline constexpr bool ProfilerViewOn        = false;
 inline constexpr bool SettingsTabOn         = true;
+
+float Renderer::GetAdaptedEV100() const
+{
+	return m_luminanceMapped ? (*m_luminanceMapped)[0].z : LightUnits::EV_SEED;
+}
 
 void Renderer::Init(
 	const Window& window,
@@ -72,6 +72,8 @@ void Renderer::Init(
 		RD::SunShadowFilter::RT_SOFT,
 		ProfilerViewOn,
 		SettingsTabOn);
+
+	ApplyPushConstantDefaults();
 
 	// ==========================
 	// === Vulkan state setup ===
@@ -115,6 +117,8 @@ void Renderer::Init(
 		jobSystem.GetThreadCount());
 #endif
 
+	m_profiler.SetDevice(m_device.get());
+
 	// -------------------
 	// Allocator creation
 	// -------------------
@@ -142,11 +146,94 @@ void Renderer::Init(
 	m_pipelineManager->CreatePipelineLayout(
 		m_device->GetContext().device,
 		m_descriptorManager->GetDescriptorLayouts());
-	m_pipelineManager->InitPipelines(m_device->GetContext().device);
 
-	// ===========================
-	// === Frame context setup ===
-	InitFrameResources(jobSystem.GetThreadCount());
+	{
+		std::string shaderLog;
+		const bool allOk = m_shaderCache.BuildFromTable(shaderLog);
+		fmt::print("{}", shaderLog);
+		INVARIANT(allOk);
+	}
+
+	m_pipelineManager->InitPipelines(m_device->GetContext().device, m_shaderCache);
+
+	m_shaderHotReload.Init(
+		m_shaderCache,
+		m_device->GetContext().device,
+		m_pipelineManager->GetGlobalLayout().pipelineLayout);
+
+	m_worldProbesHeader = {};
+	m_worldProbesPush = {};
+	m_worldProbesState = {};
+
+	// Independent resource owners initialize concurrently. Keep each table's
+	// internal insertion/allocation order serial within its own job.
+	jobSystem.SubmitJob([this](ThreadContext&) {
+		m_globalAddressTable.Init(m_allocator);
+
+		m_globalAddressTable.AddGPUBufferToAddressTable(
+			RD::Renderer_Buffer::Luminance,
+			GPU_BYTES_LUMINANCE,
+			m_allocator);
+
+		m_globalAddressTable.AddGPUBufferToAddressTable(
+			RD::Renderer_Buffer::WorldProbes,
+			GetWorldProbeBufferBytes(RD::WORLD_PROBE_COUNT),
+			m_allocator);
+
+		m_globalAddressTable.AddGPUBufferToAddressTable(
+			RD::Renderer_Buffer::WorldProbeSchedule,
+			GetWorldProbeScheduleBytes(),
+			m_allocator);
+
+		m_globalAddressTable.AddGPUBufferToAddressTable(
+			RD::Renderer_Buffer::WorldProbeSummary,
+			GetWorldProbeSummaryBytes(),
+			m_allocator);
+
+		m_globalAddressTable.AddGPUBufferToAddressTable(
+			RD::Renderer_Buffer::InstanceInputs,
+			GPU_BYTES_INSTANCE_INPUT,
+			m_allocator);
+
+		m_globalAddressTable.AddGPUBufferToAddressTable(
+			RD::Renderer_Buffer::RTRows,
+			GPU_BYTES_RT_ROWS,
+			m_allocator);
+
+		m_globalAddressTable.AddGPUBufferToAddressTable(
+			RD::Renderer_Buffer::StaticTransforms,
+			GPU_BYTES_STATIC_TRANSFORMS,
+			m_allocator);
+
+		m_globalAddressTable.AddGPUBufferToAddressTable(
+			RD::Renderer_Buffer::DrawBinKeys,
+			GPU_BYTES_DRAW_BIN_KEYS,
+			m_allocator);
+
+		m_luminanceReadbackBuffer = m_allocator.AllocateBuffer({
+			GPU_BYTES_LUMINANCE,
+			Vulkan_BufferUsage::READ_BACK,
+			HeapType::Readback
+			});
+
+		vmaMapMemory(m_allocator.GetVma(),
+			m_luminanceReadbackBuffer.m_allocation,
+			reinterpret_cast<void**>(
+				const_cast<std::array<glm::vec4, RD::MAX_LUMINANCE_GROUPS>**>(&m_luminanceMapped)));
+		});
+
+	jobSystem.SubmitJob([this](ThreadContext&) {
+		m_bindlessImageTable.Init(
+			{ m_renderExtent.Width(), m_renderExtent.Height(), 1u },
+			m_currentShadowQuality,
+			m_device->GetContext().device,
+			m_allocator);
+		});
+
+	// Called from the initialization thread, never from a SubmitJob callback.
+	// RunParallel joins frame work; Wait also joins both jobs above.
+	InitFrameResources(jobSystem);
+	jobSystem.Wait();
 
 	const size_t totalFrameStaging =
 		GPU_BYTES_INSTANCE_INPUT +
@@ -154,62 +241,12 @@ void Renderer::Init(
 		GPU_BYTES_DYNAMIC_TRANSFORMS +
 		GPU_BYTES_DYNAMIC_TRANSFORMS + // Motion matrices
 		GPU_BYTES_LIGHTS +
+		GPU_BYTES_LUMINANCE +
 		m_globalAddressTable.GPU_ADDRESS_TABLE_SIZE_GPU_BYTES;
 
 	m_allocator.InitFrameStaging(totalFrameStaging, m_device->GetNonCoherentAtomSize());
 
-	// =============================
-	// === Global resource setup ===
-
 	m_device->InitCrashMarkers(m_framesInFlight, 64);
-
-	// --------
-	// Buffers
-	//---------
-
-	m_globalAddressTable.Init(m_allocator);
-
-	m_globalAddressTable.AddGPUBufferToAddressTable(
-		RD::Renderer_Buffer::Luminance,
-		GPU_BYTES_LUMINANCE,
-		m_allocator);
-
-	m_globalAddressTable.AddGPUBufferToAddressTable(
-		RD::Renderer_Buffer::SHIrradiance,
-		GPU_BYTES_SH_IRRADIANCE,
-		m_allocator);
-
-	m_globalAddressTable.AddGPUBufferToAddressTable(
-		RD::Renderer_Buffer::InstanceInputs,
-		GPU_BYTES_INSTANCE_INPUT,
-		m_allocator);
-
-	m_globalAddressTable.AddGPUBufferToAddressTable(
-		RD::Renderer_Buffer::RTRows,
-		GPU_BYTES_RT_ROWS,
-		m_allocator);
-
-	m_globalAddressTable.AddGPUBufferToAddressTable(
-		RD::Renderer_Buffer::StaticTransforms,
-		GPU_BYTES_STATIC_TRANSFORMS,
-		m_allocator);
-
-	m_globalAddressTable.AddGPUBufferToAddressTable(
-		RD::Renderer_Buffer::DrawBinKeys,
-		GPU_BYTES_DRAW_BIN_KEYS,
-		m_allocator);
-
-	// ===================
-	// === Image setup ===
-
-	m_bindlessImageTable.Init(
-		{ m_renderExtent.Width(), m_renderExtent.Height(), 1u },
-		Environment::_HDRPathCount,
-		m_currentShadowQuality,
-		m_device->GetContext().device,
-		m_allocator);
-
-	m_bindlessImageTable.PreallocateEquirects(Environment::_HDRPaths, m_allocator);
 
 	// ===============================
 	// === Global Data processing ====
@@ -225,41 +262,30 @@ void Renderer::Init(
 				m_bindlessImageTable.UploadStaticTextures(m_allocator.GlobalStaging, cmd);
 
 			}, cmdpool, QueueType::Graphics);
-	});
+		});
 
-	jobSystem.SubmitJob([&](ThreadContext& threadCtx) {
-		auto cmdpool = m_device->GetThreadCommandPool(threadCtx.threadID, QueueType::Graphics);
+	// Keep staged texture bytes alive until deferred uploads are submitted.
 
-		m_device->RecordDeferredCommand([&](VkCommandBuffer cmd)
-			{
-				m_bindlessImageTable.UploadEquirects(
-					Environment::_HDRPaths,
-					m_allocator,
-					cmd);
-			}, cmdpool, QueueType::Graphics);
-	});
-
-	jobSystem.Wait();
-
-	m_device->SubmitDeferredCommands(QueueType::Graphics);
-
-	m_allocator.GlobalStaging.Reset();
-
-	const auto& shIrradianceBuffer = m_globalAddressTable.GetGPUBuffer(RD::Renderer_Buffer::SHIrradiance);
+	// Luminance buffer default values
+	{
+		const float seedExposure = LightUnits::ExposureFromEV100(LightUnits::EV_SEED);
+		m_defaultLuminance = glm::vec4(seedExposure, seedExposure, LightUnits::EV_SEED, 0.0f);
+		// .x = exposure, .y = previous exposure, .z = EV100, .w = history valid
+		m_luminanceSums[0] = m_defaultLuminance;
+		m_luminanceSumsReadback[0] = m_defaultLuminance;
+	}
 
 	// Global address table and luminance buffer upload
-	jobSystem.SubmitJob([&, shIrradianceBuffer](ThreadContext& threadCtx) {
-		auto cmdpool = m_device->GetThreadCommandPool(threadCtx.threadID, QueueType::Transfer);
+	jobSystem.SubmitJob([&](ThreadContext& threadCtx) {
+		auto cmdpool = m_device->GetThreadCommandPool(
+			threadCtx.threadID,
+			QueueType::Transfer);
 
 		auto stageCopyLuminance = m_allocator.GlobalStaging.Stage(
-			m_luminanceSums,
+			m_luminanceSums.data(),
 			GPU_BYTES_LUMINANCE,
-			m_globalAddressTable.GetGPUBuffer(RD::Renderer_Buffer::Luminance).m_buffer);
-
-		auto stageCopyShIrr = m_allocator.GlobalStaging.Stage(
-			m_shIrradiance,
-			GPU_BYTES_SH_IRRADIANCE,
-			shIrradianceBuffer.m_buffer);
+			m_globalAddressTable.GetGPUBuffer(
+				RD::Renderer_Buffer::Luminance).m_buffer);
 
 		auto stageCopyGlobalAddrTable = m_allocator.GlobalStaging.Stage(
 			m_globalAddressTable.GetAddrPtrTable().data(),
@@ -268,83 +294,55 @@ void Renderer::Init(
 
 		m_allocator.GlobalStaging.Flush();
 
-		m_device->RecordDeferredCommand([&,
-			shIrradianceBuffer, stageCopyLuminance, stageCopyShIrr, stageCopyGlobalAddrTable](VkCommandBuffer cmd)
-		{
-			m_allocator.GlobalStaging.CopyCommand(cmd, stageCopyLuminance);
-			m_allocator.GlobalStaging.CopyCommand(cmd, stageCopyShIrr);
-			m_allocator.GlobalStaging.CopyCommand(cmd, stageCopyGlobalAddrTable);
+		m_device->RecordDeferredCommand(
+			[&, stageCopyLuminance, stageCopyGlobalAddrTable](VkCommandBuffer cmd)
+			{
+				m_allocator.GlobalStaging.CopyCommand(cmd, stageCopyLuminance);
+				m_allocator.GlobalStaging.CopyCommand(cmd, stageCopyGlobalAddrTable);
 
-			BufferBarriers::TransferReleaseOnGraphics(
-				cmd,
-				shIrradianceBuffer,
-				m_device->GetContext());
-			BufferBarriers::TransferReleaseOnGraphics(
-				cmd,
-				m_globalAddressTable.GetTableBuffer(),
-				m_device->GetContext());
-		}, cmdpool, QueueType::Transfer);
-	});
+				BufferBarriers::TransferReleaseOnGraphics(
+					cmd,
+					m_globalAddressTable.GetTableBuffer(),
+					m_device->GetContext());
+			},
+			cmdpool,
+			QueueType::Transfer);
+		});
 
-	jobSystem.Wait();
+	// =======================
+	// === BRDF LUT SETUP ====
 
-	m_device->SubmitDeferredCommands(QueueType::Transfer);
-
-	m_allocator.GlobalStaging.Reset();
-
-	// ==========================
-	// === Environment setup ====
-
-	jobSystem.SubmitJob([&, shIrradianceBuffer](ThreadContext& threadCtx) {
+	jobSystem.SubmitJob([&](ThreadContext& threadCtx) {
 		auto cmdpool = m_device->GetThreadCommandPool(threadCtx.threadID, QueueType::Graphics);
 
-		std::vector<PipelineHandle> envPipelines = {
-			m_pipelineManager->GetHandle(RD::Renderer_Pipeline::HDRToCubemap),
-			m_pipelineManager->GetHandle(RD::Renderer_Pipeline::SHIrradiance),
-			m_pipelineManager->GetHandle(RD::Renderer_Pipeline::SpecularPrefilter),
-			m_pipelineManager->GetHandle(RD::Renderer_Pipeline::BRDFLUT) // Not apart of env set
-		};
 		m_device->RecordDeferredCommand([&](VkCommandBuffer cmd)
 			{
-				BufferBarriers::TransferWriteToComputeRead(
-					cmd,
-					m_globalAddressTable.GetTableBuffer(),
-					m_device->GetContext());
-
-				BufferBarriers::TransferWriteToComputeWrite(
-					cmd,
-					shIrradianceBuffer,
-					m_device->GetContext());
-
-				m_mainWriter.WriteBuffer(
-					RD::ADDRESS_TABLE_BINDING,
-					m_globalAddressTable.GetTableBuffer(),
-					m_descriptorManager->GetGlobalSet());
-
-				m_mainWriter.UpdateSet(
-					m_device->GetContext().device,
-					m_descriptorManager->GetGlobalSet());
-
-				m_globalAddressTable.ClearDirty();
-
 				m_descriptorManager->BindGlobalSetCompute(
 					cmd,
 					m_pipelineManager->GetGlobalLayout());
 
-				BakeEnvironmentMaps(
-					cmd,
-					m_bindlessImageTable,
-					envPipelines);
+				ComputeScope pso{ {} };
+				PushDescriptorWriter pushWriter;
 
-				BufferBarriers::ComputeWriteToRead(
-					cmd,
-					shIrradianceBuffer);
+				const auto& brdf = m_bindlessImageTable.GetStaticTexture(RD::Renderer_Texture::Brdf);
+
+				ImageUtils::TransitionLayout(cmd, brdf, RD::ImageAccess::Undefined, RD::ImageAccess::Write);
+
+				pso.BindWriteImage(pushWriter, RD::PUSH_BINDING_WRITE_1, brdf);
+				pso.UpdateExtent({ brdf.Width(), brdf.Height() });
+				pso.UpdateWorkgroups(WORKGROUP_8x8);
+				pso.SetPush(RD::PREFILTER_SAMPLE_COUNT);
+
+				pso.DispatchComputePass(cmd, m_pipelineManager->GetHandle(RD::Renderer_Pipeline::BRDFLUT), pushWriter);
+
+				ImageUtils::TransitionLayout(cmd, brdf, RD::ImageAccess::Write, RD::ImageAccess::Read);
 
 			}, cmdpool, QueueType::Graphics);
-	});
+		});
 	jobSystem.Wait();
-
 	m_device->SubmitDeferredCommands(QueueType::Graphics);
+	m_device->SubmitDeferredCommands(QueueType::Transfer);
+	m_allocator.GlobalStaging.Reset();
 
 	// ===============================
 	// === Global descriptor setup ===
@@ -352,11 +350,6 @@ void Renderer::Init(
 	jobSystem.SubmitJob([&](ThreadContext& threadCtx) {
 		m_bindlessImageTable.BuildInitialCombinedSamplerArray();
 		});
-
-	jobSystem.SubmitJob([&](ThreadContext& threadCtx) {
-		m_bindlessImageTable.BuildInitialSamplerCubeArray();
-		});
-
 
 	m_nrdReflectContext.Init(
 		*m_device,
@@ -400,6 +393,8 @@ void Renderer::Init(
 
 	CreateRenderGraph();
 
+	m_renderGraph.SetDevice(*m_device);
+
 	World::Init(
 		m_bindlessImageTable,
 		m_renderExtent,
@@ -421,7 +416,46 @@ void Renderer::Init(
 	uint32_t hilbertCurveID = m_bindlessImageTable.GetStaticTexture(RD::Renderer_Texture::HilbertCurveLut).m_bindlessID;
 	m_profiler.ssgiSettings.hilbertLutID = hilbertCurveID;
 	m_profiler.reflectPush.hilbertLutID = hilbertCurveID;
-	m_profiler.rtShadowPush.hilbertLutID = hilbertCurveID;
+	m_profiler.rtShadowPush.shadowStbnID = m_bindlessImageTable.GetStaticTexture(RD::Renderer_Texture::ShadowSTBN).m_bindlessID;
+
+	const auto& transmittance = m_bindlessImageTable.GetRenderTarget(
+		RD::Renderer_RenderTarget::AtmosphereTransmittance);
+
+	const auto& skyView = m_bindlessImageTable.GetRenderTarget(
+		RD::Renderer_RenderTarget::AtmosphereSkyView);
+
+	const auto& lighting = m_bindlessImageTable.GetRenderTarget(
+		RD::Renderer_RenderTarget::AtmosphereLighting);
+
+	ASSERT(transmittance.m_bindlessID != UINT32_MAX);
+	ASSERT(skyView.m_bindlessID != UINT32_MAX);
+	ASSERT(lighting.m_bindlessID != UINT32_MAX);
+
+	AtmosphereResources resources{};
+
+	resources.textureIDs = glm::uvec4(
+		transmittance.m_bindlessID,
+		skyView.m_bindlessID,
+		lighting.m_bindlessID,
+		UINT32_MAX);
+
+	resources.transmittanceExtent = glm::uvec4(
+		transmittance.Width(),
+		transmittance.Height(),
+		0u,
+		0u);
+
+	m_atmosphereResources_UBO = m_allocator.AllocateUniform(resources);
+
+	m_mainWriter.WriteBuffer(
+		RD::GLOBAL_ATMOSPHERE_BINDING,
+		m_atmosphereResources_UBO,
+		m_descriptorManager->GetGlobalSet(),
+		VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+
+	m_mainWriter.UpdateSet(
+		m_device->GetContext().device,
+		m_descriptorManager->GetGlobalSet());
 }
 
 // Only called after swapchain presented and queue wait
@@ -495,40 +529,6 @@ void Renderer::CheckGlobalDescriptorSetSync()
 	}
 }
 
-void Renderer::InitFrameResources(uint32_t threadCount)
-{
-	m_framesInFlight = m_swapchain.GetImageCount();
-	fmt::println("Frames in flight:[{}]", m_framesInFlight);
-
-	m_rtRayListLayout.Update(m_renderExtent.Width(), m_renderExtent.Height());
-	m_clusterBufferSizes.UpdateClusterBufferSizes(m_renderExtent.Width(), m_renderExtent.Height());
-
-	for (uint32_t i = 0; i < m_framesInFlight; ++i)
-	{
-		m_frameContexts[i].Init(
-			i,
-			threadCount,
-			*m_device,
-			*m_descriptorManager,
-			m_allocator);
-
-		m_frameContexts[i].m_cachedDrawExtent = m_renderExtent;
-
-		m_frameContexts[i].CreateClusterBuffers(m_clusterBufferSizes, m_allocator);
-		m_frameContexts[i].CreateRTRayListBuffer(m_rtRayListLayout, m_allocator);
-	}
-}
-
-void Renderer::CleanupFrameResources()
-{
-	for (uint32_t i = 0; i < m_framesInFlight; ++i)
-	{
-		m_frameContexts[i].Cleanup(
-			m_device->GetContext(),
-			m_allocator);
-	}
-}
-
 void Renderer::CreateRenderGraph()
 {
 	const uint32_t gfxFamily     = m_device->GetGraphicsQueue().GetFamilyIndex();
@@ -552,689 +552,6 @@ void Renderer::DestroyRenderGraph()
 	m_renderGraph.Shutdown();
 }
 
-void Renderer::EndAssetTimer()
-{
-	auto elapsed = m_profiler.EndTimerSec();
-	// Cheap check for now
-	if (!m_materials.empty() && m_registeredMeshes.GetMeshCount() > 0)
-	{
-		fmt::print("Asset loading completed in {:.3f} seconds.\n\n", elapsed);
-	}
-}
-
-void Renderer::InitRenderSettings(
-	bool enableLensFlare,
-	bool enableChromaticAberration,
-	bool enableBloom,
-	bool enableShadows,
-	bool enableSSS,
-	bool enableVolumetrics,
-	bool enableRTReflections,
-	RD::AntiAliasingMethod aaMode,
-	RD::GIMethod giMode,
-	RD::ShadowQuality shadowQuality,
-	RD::SunShadowFilter sunShadowFilter,
-	bool enableProfilerView,
-	bool enableSettings)
-{
-	RD::RenderToggles& toggles = m_profiler.debugToggles;
-
-	toggles.enableBloom               = enableBloom               ? 1u : 0u;
-	toggles.enableLensFlare           = enableLensFlare           ? 1u : 0u;
-	toggles.enableChromaticAberration = enableChromaticAberration ? 1u : 0u;
-	toggles.enableShadows             = enableShadows             ? 1u : 0u;
-	toggles.enableSSS                 = enableSSS                 ? 1u : 0u;
-	toggles.enableVolumetrics         = enableVolumetrics         ? 1u : 0u;
-	toggles.enableRTReflections       = enableRTReflections       ? 1u : 0u;
-
-	toggles.bloomIntensity = 0.04;
-
-	toggles.aaMode = static_cast<uint32_t>(aaMode);
-	toggles.giMode = static_cast<uint32_t>(giMode);
-
-	toggles.enableProfilerView = enableProfilerView ? 1u : 0u;
-	toggles.enableSettings     = enableSettings     ? 1u : 0u;
-
-	m_currentShadowQuality = shadowQuality;
-	m_profiler.shadowQuality = shadowQuality;
-	toggles.sunShadowFilter = static_cast<uint32_t>(sunShadowFilter);
-
-	toggles.depthScale = 1.0f / World::GetScene().GetCamera().GetFarClip();
-}
-
-void Renderer::UploadScenes(std::vector<SceneUploadBatch>&& batches)
-{
-	if (batches.empty()) return;
-
-	// Build one ModelAsset per batch upfront
-	std::vector<std::shared_ptr<ModelAsset>> assets;
-	assets.reserve(batches.size());
-
-	for (auto& batch : batches)
-	{
-		auto asset             = std::make_shared<ModelAsset>();
-		asset->sceneID         = batch.sceneID;
-		asset->sceneName       = batch.sceneName;
-		asset->lifetime        = batch.lifetime;
-		asset->instances       = std::move(batch.instances);
-		asset->nodeTransforms  = std::move(batch.nodeTransforms);
-		asset->localToNodeSlot = std::move(batch.localToNodeSlot);
-		asset->lights          = std::move(batch.lights);
-		asset->virtualInstance = batch.virtualInstance;
-		assets.push_back(asset);
-	}
-
-	// ---- Compute total staging size needed ----
-	size_t totalTexBytes     = 0;
-	size_t totalVtxBytes     = 0;
-	size_t totalIdxBytes     = 0;
-	size_t totalMeshBytes    = 0;
-	size_t totalMatBytes     = 0;
-	size_t totalMeshletBytes = 0;
-	size_t totalMLVertBytes  = 0;
-	size_t totalMLTriBytes   = 0;
-
-	auto& assetCounts = m_profiler.assetCounts;
-
-	for (auto& batch : batches)
-	{
-		for (const auto& t : batch.textures)
-			if (t.IsValid())
-				totalTexBytes += AllocatedBuffer::AlignUp(t.pixelData.size(), 4u);
-
-		// TODO: Eventually add a way to subtract from this initial count
-		assetCounts.totalVertexCount += static_cast<uint32_t>(batch.vertices.size());
-		assetCounts.totalIndexCount += static_cast<uint32_t>(batch.indices.size());
-		assetCounts.totalMeshCount += static_cast<uint32_t>(batch.meshes.size());
-		assetCounts.totalMaterialCount += static_cast<uint32_t>(batch.materials.size());
-
-		totalVtxBytes     += batch.vertices.size()         * sizeof(Vertex);
-		totalIdxBytes     += batch.indices.size()          * sizeof(uint32_t);
-		totalMeshBytes    += batch.meshes.size()           * sizeof(Mesh);
-		totalMatBytes     += batch.materials.size()        * sizeof(Material);
-		totalMeshletBytes += batch.meshlets.size()         * sizeof(Meshlet);
-		totalMLVertBytes  += batch.meshletVertices.size()  * sizeof(uint32_t);
-		totalMLTriBytes   += batch.meshletTriangles.size() * sizeof(uint8_t);
-	}
-
-	const size_t totalNeeded =
-		totalTexBytes + totalVtxBytes + totalIdxBytes
-		+ totalMeshBytes + totalMatBytes + totalMeshletBytes
-		+ totalMLTriBytes + totalMLVertBytes
-		+ m_globalAddressTable.GPU_ADDRESS_TABLE_SIZE_GPU_BYTES;
-
-	if (totalNeeded > m_allocator.GlobalStaging.GetCapacity())
-		m_allocator.ResetGlobalStaging(totalNeeded, m_device->GetNonCoherentAtomSize());
-
-	// ---- Textures — graphics queue (mip gen needs blit) ----
-	{
-		auto cmdPool = m_device->GetThreadCommandPool(
-			JobSystem::RENDER_THREAD, QueueType::Graphics);
-
-		m_device->RecordDeferredCommand([&](VkCommandBuffer cmd)
-		{
-			BatchUploadTextures(batches, assets, cmd);
-		}, cmdPool, QueueType::Graphics);
-
-		m_device->SubmitDeferredCommands(QueueType::Graphics);
-		m_device->GetGraphicsQueue().WaitIdle();
-		m_allocator.GlobalStaging.Reset();
-	}
-
-	// ---- Meshes — transfer queue ----
-	{
-		ASSERT(totalVtxBytes > 0);
-		ASSERT(totalIdxBytes > 0);
-		ASSERT(totalMeshBytes > 0);
-		ASSERT(totalMeshletBytes > 0);
-		ASSERT(totalMLVertBytes > 0);
-		ASSERT(totalMLTriBytes > 0);
-
-		// Allocate singular global buffers sized for ALL scenes combined
-		m_globalAddressTable.AddGPUBufferToAddressTable(
-			RD::Renderer_Buffer::Vertex, totalVtxBytes, m_allocator);
-
-		m_globalAddressTable.AddGPUBufferToAddressTable(
-			RD::Renderer_Buffer::Index, totalIdxBytes, m_allocator);
-
-		m_globalAddressTable.AddGPUBufferToAddressTable(
-			RD::Renderer_Buffer::Mesh, totalMeshBytes, m_allocator);
-
-		m_globalAddressTable.AddGPUBufferToAddressTable(
-			RD::Renderer_Buffer::Meshlet, totalMeshletBytes, m_allocator);
-
-		m_globalAddressTable.AddGPUBufferToAddressTable(
-			RD::Renderer_Buffer::MeshletVertices, totalMLVertBytes, m_allocator);
-
-		m_globalAddressTable.AddGPUBufferToAddressTable(
-			RD::Renderer_Buffer::MeshletTriangles, totalMLTriBytes, m_allocator);
-
-		auto cmdPool = m_device->GetThreadCommandPool(
-			JobSystem::RENDER_THREAD, QueueType::Transfer);
-
-		m_device->RecordDeferredCommand([&](VkCommandBuffer cmd)
-		{
-			BatchUploadMeshes(batches, assets, cmd);
-		}, cmdPool, QueueType::Transfer);
-
-		m_device->SubmitDeferredCommands(QueueType::Transfer);
-		m_device->GetTransferQueue().WaitIdle();
-		m_allocator.GlobalStaging.Reset();
-	}
-
-	// ---- BLAS builds -----
-	{
-		auto cmdPool = m_device->GetThreadCommandPool(
-			JobSystem::RENDER_THREAD, QueueType::Graphics);
-
-		AllocatedBuffer scratch{};
-
-		m_device->RecordDeferredCommand([&](VkCommandBuffer cmd)
-		{
-			m_blasAddresses = BuildMeshBLAS(cmd, scratch);
-		}, cmdPool, QueueType::Graphics);
-
-		m_device->SubmitDeferredCommands(QueueType::Graphics);
-		m_device->GetGraphicsQueue().WaitIdle();
-		m_allocator.FreeBuffer(scratch);
-
-		if (!m_blasAddresses.empty())
-		{
-			m_globalAddressTable.AddGPUBufferToAddressTable(
-				RD::Renderer_Buffer::BLASAddresses,
-				m_blasAddresses.size() * sizeof(uint64_t),
-				m_allocator);
-
-			auto transferPool = m_device->GetThreadCommandPool(
-				JobSystem::RENDER_THREAD, QueueType::Transfer);
-
-			m_device->RecordDeferredCommand([&](VkCommandBuffer cmd)
-			{
-				auto write = m_allocator.GlobalStaging.Stage(
-					m_blasAddresses.data(),
-					m_blasAddresses.size() * sizeof(uint64_t),
-					m_globalAddressTable.GetGPUBuffer(RD::Renderer_Buffer::BLASAddresses).m_buffer);
-
-				m_allocator.GlobalStaging.Flush();
-				m_allocator.GlobalStaging.CopyCommand(cmd, write);
-
-				BufferBarriers::TransferReleaseOnGraphics(
-					cmd,
-					m_globalAddressTable.GetGPUBuffer(RD::Renderer_Buffer::BLASAddresses),
-					m_device->GetContext());
-			}, transferPool, QueueType::Transfer);
-
-			m_device->SubmitDeferredCommands(QueueType::Transfer);
-			m_device->GetTransferQueue().WaitIdle();
-			m_allocator.GlobalStaging.Reset();
-		}
-	}
-
-	// ---- Materials — transfer queue ----
-	{
-		ASSERT(totalMatBytes > 0);
-		m_globalAddressTable.AddGPUBufferToAddressTable(
-			RD::Renderer_Buffer::Material, totalMatBytes, m_allocator);
-
-		BatchUploadMaterials(batches, assets);
-	}
-
-	// ---- Address table — single upload covering all new buffer pointers ----
-	{
-		auto cmdPool = m_device->GetThreadCommandPool(
-			JobSystem::RENDER_THREAD, QueueType::Transfer);
-
-		m_device->RecordDeferredCommand([&](VkCommandBuffer cmd)
-		{
-			auto write = m_allocator.GlobalStaging.Stage(
-				m_globalAddressTable.GetAddrPtrTable().data(),
-				m_globalAddressTable.GPU_ADDRESS_TABLE_SIZE_GPU_BYTES,
-				m_globalAddressTable.GetTableBuffer().m_buffer);
-
-			m_allocator.GlobalStaging.Flush();
-			m_allocator.GlobalStaging.CopyCommand(cmd, write);
-		}, cmdPool, QueueType::Transfer);
-
-		m_device->SubmitDeferredCommands(QueueType::Transfer);
-		m_device->GetTransferQueue().WaitIdle();
-		m_allocator.GlobalStaging.Reset();
-	}
-
-	// Register all assets into World in one pass
-	for (auto& asset : assets)
-		World::OnSceneLoaded(asset);
-
-	fmt::println("[Renderer] Uploaded {} scene(s).", batches.size());
-}
-
-void Renderer::BatchUploadTextures(
-	std::vector<SceneUploadBatch>&              batches,
-	std::vector<std::shared_ptr<ModelAsset>>&   assets,
-	VkCommandBuffer                             cmd)
-{
-	for (size_t b = 0; b < batches.size(); ++b)
-	{
-		auto& batch = batches[b];
-		auto& asset = *assets[b];
-
-		if (batch.textures.empty()) continue;
-
-		asset.ownedTextureSlots = m_bindlessImageTable.UploadAssetTextures(
-			batch,
-			m_device->GetContext().device,
-			m_allocator,
-			m_allocator.GlobalStaging,
-			cmd);
-
-		asset.textureBindlessIDs.resize(batch.textures.size(), UINT32_MAX);
-		for (uint32_t i = 0; i < static_cast<uint32_t>(batch.textures.size()); ++i)
-			asset.textureBindlessIDs[i] = batch.textures[i].bindlessID;
-	}
-}
-
-void Renderer::BatchUploadMeshes(
-	std::vector<SceneUploadBatch>&              batches,
-	std::vector<std::shared_ptr<ModelAsset>>&   assets,
-	VkCommandBuffer                             cmd)
-{
-	const auto& vtxBuf          = m_globalAddressTable.GetGPUBuffer(RD::Renderer_Buffer::Vertex);
-	const auto& idxBuf          = m_globalAddressTable.GetGPUBuffer(RD::Renderer_Buffer::Index);
-	const auto& meshBuf         = m_globalAddressTable.GetGPUBuffer(RD::Renderer_Buffer::Mesh);
-	const auto& meshletBuf      = m_globalAddressTable.GetGPUBuffer(RD::Renderer_Buffer::Meshlet);
-	const auto& meshletVertsBuf = m_globalAddressTable.GetGPUBuffer(RD::Renderer_Buffer::MeshletVertices);
-	const auto& meshletTrisBuf  = m_globalAddressTable.GetGPUBuffer(RD::Renderer_Buffer::MeshletTriangles);
-
-	// Running cursors — each scene appends after the previous
-	uint32_t globalVertexCursor       = 0;
-	uint32_t globalIndexCursor        = 0;
-	uint32_t globalMeshCursor         = 0;
-	uint32_t globalMeshletCursor      = 0;
-	uint32_t globalMeshletVertsCursor = 0;
-	uint32_t globalMeshletTrisCursor  = 0;
-
-	// Staging offsets into the single global buffer
-	size_t stagingVtxOffset          = 0;
-	size_t stagingIdxOffset          = 0;
-	size_t stagingMeshOffset         = 0;
-	size_t stagingMeshletOffset      = 0;
-	size_t stagingMeshletVertsOffset = 0;
-	size_t stagingMeshletTrisOffset  = 0;
-
-	// Collect all GPU mesh structs into one flat array
-	std::vector<Mesh> allGpuMeshes;
-	std::vector<Meshlet> allMeshlets;
-
-	for (size_t b = 0; b < batches.size(); ++b)
-	{
-		auto& batch = batches[b];
-		auto& asset = *assets[b];
-
-		if (batch.meshes.empty()) continue;
-
-		const uint32_t localMeshBase         = globalMeshCursor;
-		const uint32_t localVertBase         = globalVertexCursor;
-		const uint32_t localIndexBase        = globalIndexCursor;
-		const uint32_t localMeshletBase      = globalMeshletCursor;
-		const uint32_t localMeshletVertsBase = globalMeshletVertsCursor;
-		const uint32_t localMeshletTrisBase  = globalMeshletTrisCursor;
-
-		asset.meshGlobalIDs.reserve(batch.meshes.size());
-
-		for (auto& md : batch.meshes)
-		{
-			// Adjust to global offsets
-			md.firstIndex          += localIndexBase;
-			md.vertexOffset        += localVertBase;
-			md.shadowFirstIndex    += localIndexBase;
-			md.meshletOffset       += localMeshletBase;
-			md.shadowMeshletOffset += localMeshletBase;
-
-			Mesh gpuMesh{};
-			gpuMesh.firstIndex                  = md.firstIndex;
-			gpuMesh.indexCount                  = md.indexCount;
-			gpuMesh.vertexOffset                = md.vertexOffset;
-			gpuMesh.vertexCount                 = md.vertexCount;
-			gpuMesh.shadowFirstIndex            = md.shadowFirstIndex;
-			gpuMesh.shadowIndexCount            = md.shadowIndexCount;
-			gpuMesh.localAABB                   = md.localAABB;
-			gpuMesh.localBoundingRadius         = md.localBoundingRadius;
-			gpuMesh.meshletCount                = md.meshletCount;
-			gpuMesh.meshletOffset               = md.meshletOffset;
-			gpuMesh.shadowMeshletCount          = md.shadowMeshletCount;
-			gpuMesh.shadowMeshletOffset         = md.shadowMeshletOffset;
-			gpuMesh.meshletVisibilityBase       = md.meshletVisibilityBase;
-
-			const uint32_t globalID = m_registeredMeshes.RegisterMesh(gpuMesh);
-			md.globalMeshID = globalID;
-			asset.meshGlobalIDs.push_back(globalID);
-			allGpuMeshes.push_back(gpuMesh);
-		}
-
-		for (auto& ml : batch.meshlets)
-		{
-			ml.vertexOffset   += localMeshletVertsBase;
-			ml.triangleOffset += localMeshletTrisBase;
-			allMeshlets.push_back(ml);
-		}
-
-		m_registeredMeshes.ResizeMeshLods();
-		for (uint32_t i = 0; i < static_cast<uint32_t>(batch.meshes.size()); ++i)
-		{
-			const auto& md = batch.meshes[i];
-			auto& lods = m_registeredMeshes.GetLodsMutable()[md.globalMeshID];
-
-			auto resolve = [&](uint32_t localIdx) -> uint32_t
-			{
-				if (localIdx == UINT32_MAX) return md.globalMeshID;
-				return batch.meshes[localIdx].globalMeshID;
-			};
-
-			lods.lod0       = resolve(md.lod0);
-			lods.lod1       = resolve(md.lod1);
-			lods.lod2       = resolve(md.lod2);
-			lods.lod3       = resolve(md.lod3);
-			lods.shadowLod0 = resolve(md.shadowLod0);
-			lods.shadowLod1 = resolve(md.shadowLod1);
-			lods.shadowLod2 = resolve(md.shadowLod2);
-			lods.flags      = md.flags;
-		}
-
-		// Resolve instance local mesh -> global mesh ID
-		for (auto& inst : asset.instances)
-			if (inst.localMeshIdx != UINT32_MAX &&
-				inst.localMeshIdx < static_cast<uint32_t>(batch.meshes.size()))
-				inst.localMeshIdx = batch.meshes[inst.localMeshIdx].globalMeshID;
-
-		globalVertexCursor       += static_cast<uint32_t>(batch.vertices.size());
-		globalIndexCursor        += static_cast<uint32_t>(batch.indices.size());
-		globalMeshCursor         += static_cast<uint32_t>(batch.meshes.size());
-		globalMeshletCursor      += static_cast<uint32_t>(batch.meshlets.size());
-		globalMeshletVertsCursor += static_cast<uint32_t>(batch.meshletVertices.size());
-		globalMeshletTrisCursor  += static_cast<uint32_t>(batch.meshletTriangles.size());
-	}
-
-	// Stage all scenes into the global buffers in one contiguous write per buffer
-	size_t vtxOff = 0, idxOff = 0, mlVertOff = 0, mlTrisOff = 0;
-
-	for (auto& batch : batches)
-	{
-		if (batch.vertices.empty() && batch.meshletVertices.empty()) continue;
-
-		const size_t vBytes = batch.vertices.size() * sizeof(Vertex);
-		const size_t iBytes = batch.indices.size()  * sizeof(uint32_t);
-		const size_t mlVertBytes = batch.meshletVertices.size() * sizeof(uint32_t);
-		const size_t mlTrisBytes = batch.meshletTriangles.size() * sizeof(uint8_t);
-
-		// Stage directly into the correct offset of the global GPU buffer
-		auto vtxWrite = m_allocator.GlobalStaging.Stage(
-			batch.vertices.data(), vBytes, vtxBuf.m_buffer, vtxOff);
-		auto idxWrite = m_allocator.GlobalStaging.Stage(
-			batch.indices.data(), iBytes, idxBuf.m_buffer, idxOff);
-
-		auto mlVertWrite = m_allocator.GlobalStaging.Stage(
-			batch.meshletVertices.data(), mlVertBytes, meshletVertsBuf.m_buffer, mlVertOff);
-		auto mlTrisWrite = m_allocator.GlobalStaging.Stage(
-			batch.meshletTriangles.data(), mlTrisBytes, meshletTrisBuf.m_buffer, mlTrisOff);
-
-		m_allocator.GlobalStaging.CopyCommand(cmd, vtxWrite);
-		m_allocator.GlobalStaging.CopyCommand(cmd, idxWrite);
-
-		m_allocator.GlobalStaging.CopyCommand(cmd, mlVertWrite);
-		m_allocator.GlobalStaging.CopyCommand(cmd, mlTrisWrite);
-
-		vtxOff += vBytes;
-		idxOff += iBytes;
-		mlVertOff += mlVertBytes;
-		mlTrisOff += mlTrisBytes;
-
-		batch.vertices.clear(); batch.vertices.shrink_to_fit();
-		batch.indices.clear();  batch.indices.shrink_to_fit();
-		batch.meshletVertices.clear(); batch.meshletVertices.shrink_to_fit();
-		batch.meshletTriangles.clear();  batch.meshletTriangles.shrink_to_fit();
-	}
-
-	// Stage the combined mesh array — already adjusted to global offsets
-	if (!allGpuMeshes.empty())
-	{
-		const size_t totalMeshBytes = allGpuMeshes.size() * sizeof(Mesh);
-		auto meshWrite = m_allocator.GlobalStaging.Stage(
-			allGpuMeshes.data(), totalMeshBytes, meshBuf.m_buffer);
-		m_allocator.GlobalStaging.Flush();
-		m_allocator.GlobalStaging.CopyCommand(cmd, meshWrite);
-	}
-
-	if (!allMeshlets.empty())
-	{
-		const size_t totalMeshletBytes = allMeshlets.size() * sizeof(Meshlet);
-		auto meshletWrite = m_allocator.GlobalStaging.Stage(
-			allMeshlets.data(), totalMeshletBytes, meshletBuf.m_buffer);
-		m_allocator.GlobalStaging.Flush();
-		m_allocator.GlobalStaging.CopyCommand(cmd, meshletWrite);
-	}
-}
-
-void Renderer::BatchUploadMaterials(
-	std::vector<SceneUploadBatch>&              batches,
-	std::vector<std::shared_ptr<ModelAsset>>&   assets)
-{
-	std::vector<Material> allGpuMaterials;
-
-	for (size_t b = 0; b < batches.size(); ++b)
-	{
-		auto& batch = batches[b];
-		auto& asset = *assets[b];
-
-		if (batch.materials.empty()) continue;
-
-		asset.materialGlobalIDs.reserve(batch.materials.size());
-
-		auto resolve = [&](uint32_t localIdx, RD::Renderer_Texture errorTex) -> uint32_t
-		{
-			if (localIdx == UINT32_MAX ||
-				localIdx >= static_cast<uint32_t>(asset.textureBindlessIDs.size()))
-				return m_bindlessImageTable.GetStaticTexture(errorTex).m_bindlessID;
-			return asset.textureBindlessIDs[localIdx];
-		};
-
-		for (auto& desc : batch.materials)
-		{
-			Material mat{};
-			mat.albedoID            = resolve(desc.albedoTexIdx,     RD::Renderer_Texture::White);
-			mat.metalRoughnessID    = resolve(desc.metalRoughTexIdx, RD::Renderer_Texture::White);
-			mat.normalID            = resolve(desc.normalTexIdx,     RD::Renderer_Texture::Normal);
-			mat.emissiveID          = resolve(desc.emissiveTexIdx,   RD::Renderer_Texture::Dummy);
-			mat.colorFactor         = desc.colorFactor;
-			mat.metalRoughFactors   = desc.metalRoughFactors;
-			mat.emissiveColor       = desc.emissiveColor;
-			mat.emissiveStrength    = desc.emissiveStrength;
-			mat.alphaCutoff         = desc.alphaCutoff;
-			mat.normalScale         = desc.normalScale;
-			mat.ior                 = desc.ior;
-			mat.specularFactor      = desc.specularFactor;
-			mat.clearcoatFactor     = desc.clearcoatFactor;
-			mat.clearcoatRough      = desc.clearcoatRough;
-			mat.diffuseTransFactor  = desc.diffuseTransFactor;
-			mat.transmissionFactor  = desc.transmissionFactor;
-			mat.sheenColor          = desc.sheenColor;
-			mat.sheenRough          = desc.sheenRough;
-			mat.shadingModel        = desc.shadingModel;
-			mat.thicknessFactor     = desc.thicknessFactor;
-			mat.attenuationColor    = desc.attenuationColor;
-			mat.attenuationDistance = desc.attenuationDistance;
-
-			const uint32_t globalID = static_cast<uint32_t>(m_materials.size());
-			desc.globalMaterialID   = globalID;
-			asset.materialGlobalIDs.push_back(globalID);
-			m_materials.push_back(mat);
-			allGpuMaterials.push_back(mat);
-
-			if (globalID >= static_cast<uint32_t>(m_materialFlagsIDs.size()))
-				m_materialFlagsIDs.resize(static_cast<size_t>(globalID + 1), 0u);
-			m_materialFlagsIDs[globalID] = desc.flags;
-		}
-
-		// Resolve instance local material -> global material ID
-		for (auto& inst : asset.instances)
-			if (inst.localMaterialIdx != UINT32_MAX &&
-				inst.localMaterialIdx < static_cast<uint32_t>(batch.materials.size()))
-				inst.localMaterialIdx = batch.materials[inst.localMaterialIdx].globalMaterialID;
-	}
-
-	if (allGpuMaterials.empty()) return;
-
-	const size_t totalMatBytes = allGpuMaterials.size() * sizeof(Material);
-	const auto&  matBuf        = m_globalAddressTable.GetGPUBuffer(RD::Renderer_Buffer::Material);
-
-	auto cmdPool = m_device->GetThreadCommandPool(
-		JobSystem::RENDER_THREAD, QueueType::Transfer);
-
-	m_device->RecordDeferredCommand([&](VkCommandBuffer cmd)
-	{
-		auto matWrite = m_allocator.GlobalStaging.Stage(
-			allGpuMaterials.data(), totalMatBytes, matBuf.m_buffer);
-		m_allocator.GlobalStaging.Flush();
-		m_allocator.GlobalStaging.CopyCommand(cmd, matWrite);
-	}, cmdPool, QueueType::Transfer);
-
-	m_device->SubmitDeferredCommands(QueueType::Transfer);
-	m_device->GetTransferQueue().WaitIdle();
-	m_allocator.GlobalStaging.Reset();
-}
-
-
-std::vector<uint64_t> Renderer::BuildMeshBLAS(VkCommandBuffer cmd, AllocatedBuffer& outScratch)
-{
-	const auto& meshes = m_registeredMeshes.GetMeshes();
-	const auto& lods = m_registeredMeshes.GetLods();
-
-	const VkDeviceAddress vtxAddr = m_globalAddressTable
-		.GetGPUBuffer(RD::Renderer_Buffer::Vertex).m_address;
-	const VkDeviceAddress idxAddr = m_globalAddressTable
-		.GetGPUBuffer(RD::Renderer_Buffer::Index).m_address;
-
-	std::vector<bool> needsBLAS(meshes.size(), false);
-	for (size_t i = 0; i < meshes.size(); ++i)
-	{
-		if (lods[i].flags & MESH_FLAG_IS_LOD_VARIANT) continue;
-
-		const uint32_t rtMesh = RTMeshID(
-			static_cast<uint32_t>(i), lods[i].lod1, lods[i].flags);
-
-		ASSERT(rtMesh < meshes.size());
-		needsBLAS[rtMesh] = true;
-	}
-
-	std::vector<uint32_t> buildList;
-	for (size_t i = 0; i < meshes.size(); ++i)
-		if (needsBLAS[i] && meshes[i].indexCount >= 3)
-			buildList.push_back(static_cast<uint32_t>(i));
-
-	ASSERT(!buildList.empty());
-
-	std::vector<VkAccelerationStructureGeometryKHR> geoms(buildList.size());
-	std::vector<VkAccelerationStructureBuildGeometryInfoKHR> builds(buildList.size());
-	std::vector<VkAccelerationStructureBuildRangeInfoKHR> ranges(buildList.size());
-	std::vector<VkDeviceSize> sizes(buildList.size());
-
-	VkDeviceSize totalASBytes = 0;
-	VkDeviceSize maxScratch = 0;
-
-	for (size_t i = 0; i < buildList.size(); ++i)
-	{
-		const Mesh& m = meshes[buildList[i]];
-
-		auto& g = geoms[i];
-		g = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
-		g.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-		g.flags = 0;
-
-		auto& tri = g.geometry.triangles;
-		tri.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-		tri.pNext = nullptr;
-		tri.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-		tri.vertexData.deviceAddress = vtxAddr + static_cast<VkDeviceSize>(m.vertexOffset) * sizeof(Vertex);
-		tri.vertexStride = sizeof(Vertex);
-		tri.maxVertex = m.vertexCount - 1;
-		tri.indexType = VK_INDEX_TYPE_UINT32;
-		tri.indexData.deviceAddress = idxAddr + static_cast<VkDeviceSize>(m.firstIndex) * sizeof(uint32_t);
-		tri.transformData.deviceAddress = 0;
-
-		auto& b = builds[i];
-		b = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
-		b.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-		b.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-		b.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-		b.geometryCount = 1;
-		b.pGeometries = &geoms[i];
-
-		const uint32_t primCount = m.indexCount / 3u;
-		ranges[i] = { primCount, 0, 0, 0 };
-
-		VkAccelerationStructureBuildSizesInfoKHR sizeInfo{
-			VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
-		vkGetAccelerationStructureBuildSizesKHR(
-			m_device->GetContext().device,
-			VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-			&b, &primCount, &sizeInfo);
-
-		sizes[i] = AllocatedBuffer::AlignUp(sizeInfo.accelerationStructureSize, MIN_SSBO_ALIGNMENT_BYTES);
-		totalASBytes += sizes[i];
-		maxScratch = std::max(maxScratch, sizeInfo.buildScratchSize);
-	}
-
-	const VkDeviceSize scratchAlign = m_device->GetMinASScratchAlignment();
-
-	m_blasStorage = m_allocator.AllocateBuffer({
-		totalASBytes, Vulkan_BufferUsage::AS_STORAGE, HeapType::GPU_Local, false, "BLASStorage" });
-
-	AllocatedBuffer scratch = m_allocator.AllocateBuffer({
-		maxScratch + scratchAlign, Vulkan_BufferUsage::AS_SCRATCH, HeapType::GPU_Local, false, "BLASScratch" });
-
-	const VkDeviceAddress scratchAddr =
-		(scratch.m_address + scratchAlign - 1) & ~(scratchAlign - 1);
-
-	std::vector<uint64_t> blasAddresses(meshes.size(), 0ull);
-	m_blasHandles.resize(buildList.size());
-
-	VkDeviceSize offset = 0;
-
-	for (size_t i = 0; i < buildList.size(); ++i)
-	{
-		VkAccelerationStructureCreateInfoKHR ci{
-			VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR };
-		ci.buffer = m_blasStorage.m_buffer;
-		ci.offset = offset;
-		ci.size = sizes[i];
-		ci.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-
-		VK_CHECK(vkCreateAccelerationStructureKHR(
-			m_device->GetContext().device, &ci, nullptr, &m_blasHandles[i]));
-
-		offset += sizes[i];
-
-		builds[i].dstAccelerationStructure = m_blasHandles[i];
-		builds[i].scratchData.deviceAddress = scratchAddr;
-
-		ASSERT((scratchAddr % scratchAlign) == 0);
-		ASSERT(scratchAddr + maxScratch <= scratch.m_address + scratch.m_bytesSize);
-
-		const VkAccelerationStructureBuildRangeInfoKHR* pRange = &ranges[i];
-		vkCmdBuildAccelerationStructuresKHR(cmd, 1, &builds[i], &pRange);
-		BufferBarriers::ASBuildToASBuild(cmd);
-
-		VkAccelerationStructureDeviceAddressInfoKHR addrInfo{
-			VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR };
-		addrInfo.accelerationStructure = m_blasHandles[i];
-
-		blasAddresses[buildList[i]] = vkGetAccelerationStructureDeviceAddressKHR(
-			m_device->GetContext().device, &addrInfo);
-	}
-
-	//fmt::println("[RT] BLAS built for {} of {} meshes", buildList.size(), meshes.size());
-
-	outScratch = scratch;
-	return blasAddresses;
-}
 
 
 // ===============================================
@@ -1259,13 +576,21 @@ void Renderer::UpdateRendererContext(GLFWwindow* window)
 		m_renderExtent,
 		m_displayExtent,
 		frameCtx,
-		m_allocator,
 		m_profiler,
 		window,
+		GetAdaptedEV100(),
 		m_renderGraphState.TemporalAllowed());
 
 	frameCtx.SetTemporalResult(scene.GetTemporalResult() && !IsFirstFrame());
 	frameCtx.SetHiZValidResult(scene.GetHiZTemporalResult());
+
+	{
+		if (m_bLuminanceResetPending)
+		{
+			frameCtx.MarkLuminanceReset();
+			m_bLuminanceResetPending = false;
+		}
+	}
 
 	m_renderGraphState.SetTemporalIndex(static_cast<uint64_t>(sceneData.temporal.x));
 
@@ -1309,10 +634,21 @@ void Renderer::UpdateRendererContext(GLFWwindow* window)
 	taaPush.invDeltaTime = 1.0f / rawDt;
 
 	// Luminace exposure pass
-	uint32_t tilesX = (m_displayExtent.Width() + 15u) / 16u;
-	uint32_t tilesY = (m_displayExtent.Height() + 15u) / 16u;
+	const uint32_t lumaW = m_renderExtent.Width();
+	const uint32_t lumaH = m_renderExtent.Height();
+
+	uint32_t tilesX = (lumaW + 15u) / 16u;
+	uint32_t tilesY = (lumaH + 15u) / 16u;
+
 	lumaPush.totalLumaTiles = tilesX * tilesY;
-	lumaPush.cameraExposure = m_profiler.toneMappingSettings.cameraExposure;
+	lumaPush.pixelCount = lumaW * lumaH;
+	lumaPush.deltaTime = std::clamp(rawDt, 1e-4f, 0.1f);
+	lumaPush.resetAdaptation = frameCtx.IsLuminanceResetNeeded() ? 1u : 0u;
+
+	if (lumaPush.manualExposure != 0u && m_lastManualExposure == 0u)
+		lumaPush.manualEV100 = scene.GetCamera().GetEV100();
+
+	m_lastManualExposure = lumaPush.manualExposure;
 
 	glm::vec2 halfResSize = {
 		static_cast<float>(m_rtRayListLayout.halfWidth),
@@ -1342,18 +678,18 @@ void Renderer::UpdateRendererContext(GLFWwindow* window)
 		rtShadowPush.resolution = nrdSPush.resSize;
 		rtShadowPush.invResolution = nrdSPush.resTexel;
 
-		rtShadowPush.rayCapacity  = m_rtRayListLayout.capacities[RD::RT_RAY_SLOT_SHADOW];
-		rtShadowPush.rayBase      = m_rtRayListLayout.bases[RD::RT_RAY_SLOT_SHADOW];
+		rtShadowPush.rayCapacity = m_rtRayListLayout.capacities[RD::RT_RAY_SLOT_SHADOW];
+		rtShadowPush.rayBase = m_rtRayListLayout.bases[RD::RT_RAY_SLOT_SHADOW];
 	}
 
 	// RT reflection push
 	{
-		reflectPush.halfResSize  = halfResSize;
+		reflectPush.halfResSize = halfResSize;
 		reflectPush.halfResTexel = halfResTexel;
-		reflectPush.noiseIndex   = noiseIndex;
+		reflectPush.noiseIndex = noiseIndex;
 		reflectPush.shadow.sunDirectionWS = rtShadowPush.shadow.sunDirectionWS;
-		reflectPush.rayCapacity  = m_rtRayListLayout.capacities[RD::RT_RAY_SLOT_REFLECT];
-		reflectPush.rayBase      = m_rtRayListLayout.bases[RD::RT_RAY_SLOT_REFLECT];
+		reflectPush.rayCapacity = m_rtRayListLayout.capacities[RD::RT_RAY_SLOT_REFLECT];
+		reflectPush.rayBase = m_rtRayListLayout.bases[RD::RT_RAY_SLOT_REFLECT];
 	}
 
 	if (m_activeEnvSet != debug.activeEnvMap)
@@ -1378,19 +714,42 @@ void Renderer::UpdateRendererContext(GLFWwindow* window)
 	debug.activeInstanceCount = World::GetInstanceState().gpuInputs.size();
 	debug.activeLightCount = LightingSystem::GetLightBufferCount();
 	debug.activeRTInstances = World::GetInstanceState().rtInstanceCount;
-	{
-		auto& ssgiPush = m_profiler.ssgiSettings;
 
-		ssgiPush.ndcToViewMul_x_PixelSize = sceneData.ndcToViewMult * fullPixelSize;
-
-		ssgiPush.noiseIndex = noiseIndex;
-		ssgiPush.isFinalPass = 0u; // Reset each frame
-	}
+	debug.worldProbesDebugView =
+		(m_profiler.worldProbeSettings.enabled && m_profiler.worldProbeSettings.debugDraw) ? 1u : 0u;
 
 	m_renderGraphState.UpdateToggles(debug);
 	m_renderGraphState.UpdateTemporal(
 		frameCtx.IsTemporalValid(),
 		frameCtx.IsHiZValid());
+
+	{
+		auto& p = m_profiler.ssgiSettings;
+
+		p.ndcToViewMul_x_PixelSize =
+			sceneData.ndcToViewMult * fullPixelSize;
+
+		p.noiseIndex = static_cast<uint32_t>(noiseIndex);
+		p.isFinalPass = 0u;
+
+		p.aoHistoryWeight = std::clamp(p.aoHistoryWeight, 0.0f, 0.99f);
+		p.aoDepthTolerance = std::clamp(p.aoDepthTolerance, 0.001f, 0.1f);
+		p.aoNormalThreshold = std::clamp(p.aoNormalThreshold, 0.0f, 0.9999f);
+
+		const bool aoRunsThisFrame =
+			m_renderGraphState.InstancesActive() &&
+			debug.giMode != static_cast<uint32_t>(RD::GIMethod::OFF) &&
+			!m_renderGraphState.IsWireframeOn();
+
+		p.aoHistoryValid =
+			aoRunsThisFrame &&
+			m_aoRanPreviousFrame &&
+			frameCtx.IsTemporalValid()
+			? 1u
+			: 0u;
+
+		m_aoRanPreviousFrame = aoRunsThisFrame;
+	}
 
 	m_renderGraphState.ResetDebugMask();
 	// Priority order
@@ -1417,6 +776,7 @@ void Renderer::UpdateRendererContext(GLFWwindow* window)
 		World::GetInstanceState().rtRows,
 		World::GetScene(), // Needs reference
 		LightingSystem::_globalLightList,
+		m_defaultLuminance,
 		frameCtx.IsTemporalValid() && m_renderGraphState.IsTaaOn());
 
 	if (m_renderGraphState.IsNRDActive())
@@ -1434,6 +794,50 @@ void Renderer::UpdateRendererContext(GLFWwindow* window)
 			frameCtx.IsTemporalValid() && !IsFirstFrame());
 	}
 
+	m_atmosphereState.Prepare(m_profiler.atmosphereSettings, m_frameNumber);
+
+	{
+		const auto push = MakeAtmosphereSkyPush(
+			m_atmosphereState.Parameters(),
+			m_profiler.atmosphereSkySettings);
+
+		auto& uploadScene = World::GetScene().GetSceneData();
+
+		uploadScene.atmosphereRayleigh = push.parameters.rayleigh;
+		uploadScene.atmosphereMie = push.parameters.mie;
+		uploadScene.atmosphereAbsorption = push.parameters.absorption;
+		uploadScene.atmosphereGeometry = push.parameters.geometry;
+		uploadScene.atmosphereIntegration = push.parameters.integration;
+
+		uploadScene.atmospherePlacement = push.placement;
+		uploadScene.atmosphereScattering = push.scattering;
+		uploadScene.atmosphereSun = push.sun;
+		uploadScene.atmosphereGround = glm::vec4(
+			glm::clamp(glm::vec3(m_profiler.atmosphereSkySettings.ground), glm::vec3(0.0f), glm::vec3(1.0f)),
+			std::max(m_profiler.atmosphereSkySettings.ground.w, 0.0f));
+	}
+
+	const bool worldProbeSSGIValid =
+		frameCtx.IsTemporalValid() &&
+		m_renderGraphState.InstancesActive() &&
+		!m_renderGraphState.IsWireframeOn() &&
+		debug.giMode == static_cast<uint32_t>(RD::GIMethod::VBGI);
+
+	UpdateWorldProbes(rtDirty, worldProbeSSGIValid, rawDt);
+
+	// ================================
+	// Scene uniform buffer creation
+	// ================================
+	frameCtx.AssignSceneUniform(m_allocator.AllocateUniform(sceneData), m_allocator);
+
+	// Vulkan requires a buffer created once its defined in used shader, even if that buffer isn't actually used.
+	frameCtx.AssignCSMUniform(m_allocator.AllocateUniform(scene.GetCSMData()), m_allocator);
+	frameCtx.AssignVolumetricShadowUniform(m_allocator.AllocateUniform(scene.GetVolumetricShadowInfo()), m_allocator);
+
+	// ===========================
+	// Frame update info finished
+	// ===========================
+
 	new (&m_renderPassExecutionContext) RenderPassExecutionContext
 	{
 		.commandBuffer = frameCtx.GetPrimaryCommandBuffer(), // placeholder
@@ -1441,6 +845,8 @@ void Renderer::UpdateRendererContext(GLFWwindow* window)
 		.profiler = &m_profiler,
 		.imageTable = &m_bindlessImageTable,
 		.bufferTable = &m_globalAddressTable,
+		.atmosphereState = &m_atmosphereState,
+		.worldProbePush = &m_worldProbesPush,
 		.scene = &scene,
 		.frameState = &m_renderGraphState,
 		.swapchain = &m_swapchain,
@@ -1457,11 +863,11 @@ void Renderer::UpdateRendererContext(GLFWwindow* window)
 	const auto& schedule = m_renderGraph.GetSchedule();
 	auto& async = m_profiler.asyncStats;
 
-	async.bDedicatedQueue    = m_renderGraph.HasDedicatedComputeQueue();
-	async.bActiveThisFrame   = schedule.bUsesAsyncCompute;
+	async.bDedicatedQueue = m_renderGraph.HasDedicatedComputeQueue();
+	async.bActiveThisFrame = schedule.bUsesAsyncCompute;
 	async.graphicsBatchCount = schedule.graphicsBatchCount;
-	async.asyncPassCount     = static_cast<uint32_t>(schedule.Get(BatchId::C0).passes.size());
-	async.overlapPassCount   = static_cast<uint32_t>(schedule.Get(BatchId::G1).passes.size());
+	async.asyncPassCount = static_cast<uint32_t>(schedule.Get(BatchId::C0).passes.size());
+	async.overlapPassCount = static_cast<uint32_t>(schedule.Get(BatchId::G1).passes.size());
 }
 
 
@@ -1477,6 +883,24 @@ bool Renderer::PrepareFrame()
 	// Must always wait first
 	auto fenceResult = m_swapchain.WaitOnInFlightFence(frameCtx.m_frameIndex);
 	if (fenceResult == VK_ERROR_DEVICE_LOST) m_device->DumpDeviceState("Wait_On_In_Flight_Fence");
+
+	const VkPipeline previousAtmospherePipeline =
+		m_pipelineManager->GetHandle(
+			RD::Renderer_Pipeline::AtmosphereTransmittance).pipeline;
+
+	m_pipelineManager->TickFrame(
+		m_device->GetContext().device, m_frameNumber, m_framesInFlight);
+
+	m_shaderHotReload.Publish(*m_pipelineManager);
+
+	const VkPipeline currentAtmospherePipeline =
+		m_pipelineManager->GetHandle(
+			RD::Renderer_Pipeline::AtmosphereTransmittance).pipeline;
+
+	if (currentAtmospherePipeline != previousAtmospherePipeline)
+	{
+		m_atmosphereState.Invalidate();
+	}
 
 	m_device->ResetCrashMarkers(frameCtx.m_frameIndex);
 
@@ -1617,6 +1041,12 @@ bool Renderer::PrepareFrame()
 		m_profiler.gpuStats = *frameCtx.m_statsMapped;
 	}
 
+	if (m_luminanceMapped)
+	{
+		vmaInvalidateAllocation(m_allocator.GetVma(), m_luminanceReadbackBuffer.m_allocation, 0, sizeof(m_luminanceSums));
+		m_luminanceSumsReadback = *m_luminanceMapped;
+	}
+
 	return m_resize.IsPending();
 }
 
@@ -1630,12 +1060,12 @@ bool Renderer::SubmitFrame()
 
 	auto& graphicsQ = m_device->GetGraphicsQueue();
 	auto& transferQ = m_device->GetTransferQueue();
-	auto& computeQ  = m_device->GetComputeQueue();
-	auto& presentQ  = m_device->GetPresentQueue();
+	auto& computeQ = m_device->GetComputeQueue();
+	auto& presentQ = m_device->GetPresentQueue();
 
 	VkSemaphore presentSem = m_swapchain.GetAvailableSemaphore();
-	VkSemaphore renderSem  = m_swapchain.GetFinishedSemaphore();
-	VkFence     fence      = m_swapchain.GetInFlightFence();
+	VkSemaphore renderSem = m_swapchain.GetFinishedSemaphore();
+	VkFence     fence = m_swapchain.GetInFlightFence();
 
 	const auto& schedule = m_renderGraph.GetSchedule();
 
@@ -1676,7 +1106,20 @@ bool Renderer::SubmitFrame()
 			frameCtx.GetGraphicsPrimary(0u),
 			renderSem,
 			fence);
-		if (gfxResult == VK_ERROR_DEVICE_LOST) m_device->DumpDeviceState("Graphics_Submit_Single");
+
+		if (gfxResult == VK_ERROR_DEVICE_LOST)
+			m_device->DumpDeviceState("Graphics_Submit_Single");
+
+		if (gfxResult == VK_SUCCESS)
+		{
+			m_atmosphereState.MarkSubmitted(m_frameNumber);
+			OnWorldProbesSubmitted();
+		}
+		else
+		{
+			m_atmosphereState.MarkAborted();
+			VK_CHECK(gfxResult);
+		}
 	}
 	else
 	{
@@ -1762,7 +1205,19 @@ bool Renderer::SubmitFrame()
 				renderSem,
 				fence);
 
-			if (gfxResult == VK_ERROR_DEVICE_LOST) m_device->DumpDeviceState("Graphics_Submit_Async");
+			if (gfxResult == VK_ERROR_DEVICE_LOST)
+				m_device->DumpDeviceState("Graphics_Submit_Async");
+
+			if (gfxResult == VK_SUCCESS)
+			{
+				m_atmosphereState.MarkSubmitted(m_frameNumber);
+				OnWorldProbesSubmitted();
+			}
+			else
+			{
+				m_atmosphereState.MarkAborted();
+				VK_CHECK(gfxResult);
+			}
 		}
 	}
 
@@ -1773,6 +1228,7 @@ bool Renderer::SubmitFrame()
 		renderSem);
 	if (presentResult == VK_ERROR_DEVICE_LOST) m_device->DumpDeviceState("Swapchain_Present");
 
+	// --- Checking resize events ---
 	if (presentResult == VK_ERROR_OUT_OF_DATE_KHR)
 	{
 		m_resize.Request(ResizeReason::PresentOutOfDate);
@@ -1890,6 +1346,9 @@ void Renderer::RebuildFrameContexts()
 	}
 
 	m_renderGraphState.UpdateTemporal(false, false);
+
+	m_aoRanPreviousFrame = false;
+	m_profiler.ssgiSettings.aoHistoryValid = 0u;
 }
 
 void Renderer::ValidateExtentCoherence()
@@ -1953,7 +1412,7 @@ void Renderer::UpdateDisplayExtent(Extents2D newWindowExtent)
 	m_renderGraph.SetRenderExtent(m_renderExtent);
 	m_renderGraph.SetDisplayExtent(m_displayExtent);
 
-	m_bindlessImageTable.UpdateRenderTargets({width, height, 1u}, m_allocator);
+	m_bindlessImageTable.UpdateRenderTargets({ width, height, 1u }, m_allocator);
 
 	{
 		auto cmdGfxPool = m_device->GetThreadCommandPool(JobSystem::RENDER_THREAD, QueueType::Graphics);
@@ -1989,6 +1448,12 @@ void Renderer::UpdateDisplayExtent(Extents2D newWindowExtent)
 	}
 
 	m_renderGraph.InvalidateTrackedLayouts();
+
+	m_renderGraph.NotifyLayout(
+		RD::Renderer_RenderTarget::AtmosphereTransmittance,
+		RD::ImageAccess::Undefined);
+
+	m_atmosphereState.Invalidate();
 }
 
 void Renderer::TimestampPoolStart(FrameContext& frameCtx, VkCommandBuffer cmd)
@@ -2088,6 +1553,16 @@ void Renderer::BarrierDynamicBuffers(FrameContext& frameCtx, VkCommandBuffer cmd
 			m_device->GetContext());
 
 		frameCtx.m_gpuAddressTable.ClearDirty();
+	}
+
+	if (frameCtx.IsLuminanceResetNeeded())
+	{
+		BufferBarriers::TransferWriteToComputeWrite(
+			cmd,
+			m_globalAddressTable.GetGPUBuffer(RD::Renderer_Buffer::Luminance),
+			m_device->GetContext());
+
+		frameCtx.ClearLuminanceResetFlag();
 	}
 }
 
@@ -2272,12 +1747,22 @@ void Renderer::Cleanup()
 	m_blasHandles.clear();
 	m_allocator.FreeBuffer(m_blasStorage);
 
+	m_allocator.FreeBuffer(m_atmosphereResources_UBO);
+
+	if (m_luminanceMapped)
+	{
+		vmaUnmapMemory(m_allocator.GetVma(), m_luminanceReadbackBuffer.m_allocation);
+		m_luminanceMapped = nullptr;
+	}
+	m_allocator.FreeBuffer(m_luminanceReadbackBuffer);
+
 	m_bindlessImageTable.Shutdown(m_device->GetContext().device, m_allocator);
 	m_globalAddressTable.Shutdown(m_allocator);
 
 	CleanupFrameResources();
 
 	m_descriptorManager->CleanupDescriptors(m_device->GetContext().device);
+	m_shaderHotReload.Shutdown();
 	m_pipelineManager->Shutdown(m_device->GetContext().device);
 
 	m_allocator.Shutdown();

@@ -20,6 +20,8 @@ namespace BufferBarriers
 		VkCommandBuffer cmd,
 		const AllocatedBuffer& buf);
 
+	void ComputeStorageRW(VkCommandBuffer cmd);
+
 	void ComputeWriteToIndirectRead(
 		VkCommandBuffer cmd,
 		const AllocatedBuffer& buf);

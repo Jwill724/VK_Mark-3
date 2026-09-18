@@ -1,78 +1,48 @@
-#version 450
+#version 460
 
 #extension GL_GOOGLE_include_directive : require
-#extension GL_ARB_separate_shader_objects : require
 
 #include "../include/common.glsl"
+#include "../include/depth.glsl"
+#include "../include/ssgi_push.glsl"
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(set = PUSH_SET, binding = PUSH_BINDING_READ_1) uniform sampler2D inGIHistory;
 layout(set = PUSH_SET, binding = PUSH_BINDING_READ_2) uniform sampler2D inEdgeInfo;
+layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1, rgba16f) writeonly uniform image2D outGI;
 
-layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1) writeonly uniform image2D outGI;
+void main()
+{
+	ivec2 extent = textureSize(inGIHistory, 0);
+	ivec2 p = ivec2(gl_GlobalInvocationID.xy);
 
-layout(push_constant) uniform PushConstantData {
-	float effectRadius;
-	float effectFalloffRange;
-	vec2  ndcToViewMul_x_PixelSize;
+	if (any(greaterThanEqual(p, extent))) return;
 
-	float radiusMultiplier;
-	float sampleDistributionPower;
-	uint  noiseIndex;
-	uint  hilbertLutID;
-	float denoiseBlurBeta;
+	vec4 c = texelFetch(inGIHistory, p, 0);
+	vec4 e = unpackEdges(texelFetch(inEdgeInfo, p, 0).r);
 
-	uint  isFinalPass;
-	float upsampleDepthSigma;
-	float giClampMax;
-	float giReprojTolerance;
+	ivec2 offsets[4] = ivec2[4](
+		ivec2(-1, 0),
+		ivec2(1, 0),
+		ivec2(0, -1),
+		ivec2(0, 1));
 
-	float giTemporalAlpha;
-	float giFallbackStrength;
-} pc;
+	vec3 sum = c.rgb * 4.0;
+	float weight = 4.0;
 
-const float GI_DIAG_WEIGHT = 0.5;
-
-void main() {
-	SceneData scene = getSceneData();
-
-	const ivec2 halfExtent = (ivec2(scene.renderExtentSize.xy) + 1) / 2;
-	const ivec2 halfPix    = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(halfPix, halfExtent))) return;
-
-	vec4 edgesC = unpackEdges(texelFetch(inEdgeInfo, halfPix, 0).r);
-
-	const ivec2 offs[8] = ivec2[8](
-		ivec2(-1,  0), ivec2( 1,  0), ivec2( 0, -1), ivec2( 0,  1),
-		ivec2(-1, -1), ivec2( 1, -1), ivec2(-1,  1), ivec2( 1,  1));
-
-	float w[8];
-	w[0] = edgesC.x;
-	w[1] = edgesC.y;
-	w[2] = edgesC.z;
-	w[3] = edgesC.w;
-	w[4] = GI_DIAG_WEIGHT * edgesC.x * edgesC.z;
-	w[5] = GI_DIAG_WEIGHT * edgesC.y * edgesC.z;
-	w[6] = GI_DIAG_WEIGHT * edgesC.x * edgesC.w;
-	w[7] = GI_DIAG_WEIGHT * edgesC.y * edgesC.w;
-
-	vec4 giHistory = texelFetch(inGIHistory, halfPix, 0);
-
-	float accum      = giHistory.a;
-	float maxAccum   = 1.0 / max(pc.giTemporalAlpha, 1e-4);
-	float centerBoost = mix(1.0, 16.0, saturate(accum / maxAccum));
-
-	vec3  sum  = giHistory.rgb * centerBoost;
-	float wSum = centerBoost;
-
-	for (int i = 0; i < 8; ++i)
+	for (int i = 0; i < 4; ++i)
 	{
-		if (w[i] <= 1e-4) continue;
-		ivec2 p = clamp(halfPix + offs[i], ivec2(0), halfExtent - 1);
-		sum  += texelFetch(inGIHistory, p, 0).rgb * w[i];
-		wSum += w[i];
+		vec4 v = texelFetch(
+			inGIHistory,
+			clamp(p + offsets[i], ivec2(0), extent - 1),
+			0);
+
+		float w = e[i] * v.a;
+
+		sum += v.rgb * w;
+		weight += w;
 	}
 
-	imageStore(outGI, halfPix, vec4(sum / max(wSum, 1e-5), 0.0));
+	imageStore(outGI, p, vec4(sum / weight, c.a));
 }

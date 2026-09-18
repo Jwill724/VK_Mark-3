@@ -12,7 +12,8 @@ public:
 	void WriteBuffer(
 		uint32_t binding,
 		const AllocatedBuffer& buffer,
-		VkDescriptorSet set);
+		VkDescriptorSet set,
+		VkDescriptorType type = VK_DESCRIPTOR_TYPE_MAX_ENUM);
 
 	void WriteBindlessImages(
 		std::span<const VkDescriptorImageInfo> images,

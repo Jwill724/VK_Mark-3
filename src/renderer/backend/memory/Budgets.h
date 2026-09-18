@@ -9,7 +9,7 @@ inline constexpr size_t SIZEOF_VISIBLE_INSTANCE  = 16u;   // 4 x uint
 inline constexpr size_t SIZEOF_STREAM_ENTRY      = 8u;    // 2 x uint (visibleID, binID)
 inline constexpr size_t SIZEOF_DRAW_BIN          = 16u;   // 4 x uint
 inline constexpr size_t SIZEOF_DISPATCH_ARG      = 16u;   // uvec4
-inline constexpr size_t SIZEOF_LOCAL_LIGHT       = 68u;
+inline constexpr size_t SIZEOF_LOCAL_LIGHT       = 72u;
 inline constexpr size_t SIZEOF_MAT4              = 64u;
 inline constexpr size_t SIZEOF_RT_INSTANCE       = 64u;
 inline constexpr size_t SIZEOF_BIN_KEY           = 12u;   // 3 x uint (meshID, materialID, binID)
@@ -74,10 +74,7 @@ inline constexpr size_t GPU_BYTES_VISIBLE_LIGHT_IDS
 	= RD::MAX_LIGHTS * sizeof(uint32_t);
 
 inline constexpr size_t GPU_BYTES_LUMINANCE
-	= RD::MAX_LUMINANCE_GROUPS * sizeof(float) * 4;
-
-inline constexpr size_t GPU_BYTES_SH_IRRADIANCE
-	= RD::MAX_ENVIRONMENT_SETS * (sizeof(float) * 3) * 9;
+	= (RD::MAX_LUMINANCE_GROUPS + 1u) * sizeof(float) * 4;
 
 inline constexpr size_t  GPU_BYTES_MESHLET_VISIBILITY = RD::MAX_MESHLET_VISIBILITY_BITS / 8u;
 

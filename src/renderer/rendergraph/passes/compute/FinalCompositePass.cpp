@@ -28,7 +28,7 @@ void RegisterFinalCompositePass(RenderGraph& graph)
 					RD::ImageAccess::Read, RD::ImageAccess::Read, true, true)
 
 				.ReadResource(
-					RD::Renderer_RenderTarget::VolumetricLight,
+					RD::Renderer_RenderTarget::FroxelIntegrated,
 					RD::ImageAccess::Read)
 
 				.ReadResource(
@@ -40,6 +40,10 @@ void RegisterFinalCompositePass(RenderGraph& graph)
 				.ReadResource(
 					RD::Renderer_RenderTarget::LensFlareColor,
 					RD::ImageAccess::Read)
+
+				.ReadResource(
+					RD::Renderer_RenderTarget::DepthResolved,
+					RD::ImageAccess::DepthRead)
 
 				.WriteResource(
 					RD::Renderer_RenderTarget::Tonemap,
@@ -59,17 +63,22 @@ void RegisterFinalCompositePass(RenderGraph& graph)
 						pass.scope = ComputeScope{{ graph.GetDisplayExtent() }};
 						auto& pso = std::get<ComputeScope>(pass.scope);
 
+						ctx.profiler->compositePush.fogEnabled =
+							ctx.frameState->VolumetricFogActive() ? 1u : 0u;
+
+						pso.SetPush(ctx.profiler->compositePush);
+
 						bool taaEnabled = (ctx.frameState->IsTaaOn() && ctx.frameState->IsTemporalValid() && !ctx.frameState->DebugRendering());
 
 						const auto& hdrScene = !taaEnabled
 							? ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::HDRScene)
 							: ctx.imageTable->GetRenderTarget(TemporalHistory::GetColorHistorySlots(ctx.frameState->GetTemporalIndex()).write);
 
-						const auto& volumetricLight = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::VolumetricLight);
+						const auto& froxelIntegrated = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::FroxelIntegrated);
+						const auto& depthResolved = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::DepthResolved);
 						const auto& tonemap = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::Tonemap);
 						const auto& lensflare = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::LensFlareColor);
 						const auto& bloom = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::BloomMipchain);
-						const auto& dummy = ctx.imageTable->GetStaticTexture(RD::Renderer_Texture::Dummy);
 						const auto linearClampSampler = ctx.imageTable->GetSampler(RD::Renderer_Sampler::LinearClamp);
 						const auto linearSampler = ctx.imageTable->GetSampler(RD::Renderer_Sampler::Linear);
 
@@ -84,63 +93,32 @@ void RegisterFinalCompositePass(RenderGraph& graph)
 							hdrScene,
 							linearSampler);
 
-						if (ctx.frameState->IsVolumetricsOn() &&
-							ctx.scene->GetVolumetricShadowInfo().params.y != 0.0f &&
-							!ctx.frameState->DebugRendering())
-						{
-							pso.BindReadImage(
-								pass.pushWriter,
-								RD::PUSH_BINDING_READ_2,
-								volumetricLight,
-								linearClampSampler);
-						}
-						else
-						{
-							pso.BindReadImage(
-								pass.pushWriter,
-								RD::PUSH_BINDING_READ_2,
-								dummy,
-								linearClampSampler);
-						}
+						pso.BindReadImage(
+							pass.pushWriter,
+							RD::PUSH_BINDING_READ_2,
+							depthResolved,
+							linearSampler,
+							UINT32_MAX,
+							RD::ImageAccess::DepthRead);
 
-						if (ctx.profiler->debugToggles.enableLensFlare &&
-							!ctx.profiler->enableWireframeView &&
-							!ctx.frameState->DebugRendering())
-						{
-							pso.BindReadImage(
-								pass.pushWriter,
-								RD::PUSH_BINDING_READ_3,
-								lensflare,
-								linearClampSampler);
-						}
-						else
-						{
-							pso.BindReadImage(
-								pass.pushWriter,
-								RD::PUSH_BINDING_READ_3,
-								dummy,
-								linearClampSampler);
-						}
+						pso.BindReadImage(
+							pass.pushWriter,
+							RD::PUSH_BINDING_READ_3,
+							froxelIntegrated,
+							linearClampSampler);
 
-						if (ctx.profiler->debugToggles.enableBloom &&
-							!ctx.profiler->enableWireframeView &&
-							!ctx.frameState->DebugRendering())
-						{
-							pso.BindReadImage(
-								pass.pushWriter,
-								RD::PUSH_BINDING_READ_4,
-								bloom,
-								linearClampSampler,
-								0);
-						}
-						else
-						{
-							pso.BindReadImage(
-								pass.pushWriter,
-								RD::PUSH_BINDING_READ_4,
-								dummy,
-								linearClampSampler);
-						}
+						pso.BindReadImage(
+							pass.pushWriter,
+							RD::PUSH_BINDING_READ_4,
+							lensflare,
+							linearClampSampler);
+
+						pso.BindReadImage(
+							pass.pushWriter,
+							RD::PUSH_BINDING_READ_5,
+							bloom,
+							linearClampSampler,
+							0);
 
 						pso.DispatchComputePass(
 							ctx.commandBuffer,

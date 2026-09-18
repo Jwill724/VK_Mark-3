@@ -171,35 +171,35 @@ float blockerSearch(
 	out float avgBlockerDepth)
 {
 	float samplePos = texel * p.searchRadius;
- 
+
 	float sum   = 0.0;
 	float count = 0.0;
- 
+
 	for (int i = 0; i < PCSS_SEARCH_TAPS; ++i) {
 		vec2 diskPos      = vogelSample(i, PCSS_SEARCH_TAPS, phi, jitter);
 		vec2 sampleUV     = clamp(p.atlasUV + diskPos * samplePos, p.atlasMin, p.atlasMax);
 		vec2 actualOffset = sampleUV - p.atlasUV;
- 
+
 		float planeBias = clamp(dot(actualOffset, p.depthGrad), -p.maxPlaneBias, p.maxPlaneBias);
 		float depthPos  = p.depth + planeBias + MIN_SHADOW_BIAS;
- 
+
 		float depthSample = SampleTexture(shadowMapID, sampleUV).r;
 		float isBlocker   = float(depthSample < depthPos);
- 
+
 		sum   += depthSample * isBlocker;
 		count += isBlocker;
 	}
- 
+
 	avgBlockerDepth = count > 0.0 ? sum / count : 0.0;
 	return count;
 }
- 
+
 // NDC depth gap -> world distance along the light axis -> penumbra radius -> texels.
 float penumbraRadiusTexels(CascadeProj p, float avgBlockerDepth, vec4 pcss, out float gapWorld)
 {
 	float deltaNDC = max(p.depth - avgBlockerDepth, 0.0);
 	gapWorld       = deltaNDC / max(p.ndcPerWorld, 1e-9);
- 
+
 	float penumbraWorld = gapWorld * pcss.x;
 	return clamp(penumbraWorld / max(p.worldTexel, 1e-9), pcss.y, p.searchRadius);
 }
@@ -405,7 +405,7 @@ float sampleCascade(
 
 	float avgBlockerDepth;
 	if (blockerSearch(p, phiStable, jitter, shadowMapID, texel, avgBlockerDepth) == 0.0) return 1.0;
- 
+
 	float gapWorld;
 	p.radius       = penumbraRadiusTexels(p, avgBlockerDepth, csm.pcss, gapWorld);
 	p.maxPlaneBias = computeMaxPlaneBias(p.radius, p.worldTexel, p.ndcPerWorld);

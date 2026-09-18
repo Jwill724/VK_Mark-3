@@ -1,0 +1,89 @@
+#version 460
+
+#extension GL_ARB_separate_shader_objects : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "../include/common.glsl"
+#include "../include/depth.glsl"
+#include "../include/froxel.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = PUSH_SET, binding = PUSH_BINDING_READ_1) uniform sampler3D inScatterRaw;
+layout(set = PUSH_SET, binding = PUSH_BINDING_READ_2) uniform sampler3D inHistory;
+layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1) writeonly uniform image3D outResolved;
+
+layout(push_constant) uniform FroxelPush
+{
+	vec2  froxelClips;
+
+	float density;
+	float scatteringStrength;
+	float extinction;
+	float heightFalloff;
+
+	float asymmetryFactor;
+	float jitterStrength;
+	float historyWeight;
+	float localLightIntensity;
+} pc;
+
+void main()
+{
+	ivec2 cell = ivec2(gl_GlobalInvocationID.xy);
+	if (any(greaterThanEqual(cell, ivec2(FROXEL_X, FROXEL_Y)))) return;
+
+	SceneData scene = getSceneData();
+
+	bool historyValid = (scene.temporal.y != 0u);
+
+	vec2 uv = (vec2(cell) + 0.5) / vec2(FROXEL_X, FROXEL_Y);
+
+	vec3 viewRayVS = cheapReconstructViewPos(uv, 1.0, scene.ndcToViewMult, scene.ndcToViewAdd);
+	vec3 rayWS     = mat3(scene.invView) * viewRayVS;
+	vec3 camPos    = scene.cameraPos.xyz;
+
+	float nearZ = pc.froxelClips.x;
+	float farZ  = pc.froxelClips.y;
+
+	for (uint s = 0u; s < FROXEL_Z; ++s)
+	{
+		vec4 raw = texelFetch(inScatterRaw, ivec3(cell, int(s)), 0);
+
+		vec4 resolved = raw;
+
+		if (historyValid)
+		{
+			float viewDepth = froxelSliceToDepth(float(s) + 0.5, nearZ, farZ);
+			vec3  worldPos  = camPos + rayWS * viewDepth;
+
+			vec4  prevClip = scene.prevViewProjUnjittered * vec4(worldPos, 1.0);
+			float prevW    = prevClip.w;
+
+			if (prevW > 1e-6)
+			{
+				vec2  prevUV        = GetPrevUV(prevClip);
+				float prevViewDepth = -(scene.prevView * vec4(worldPos, 1.0)).z;
+
+				bool inFrustum =
+					all(greaterThanEqual(prevUV, vec2(0.0))) &&
+					all(lessThanEqual(prevUV, vec2(1.0))) &&
+					prevViewDepth >= nearZ && prevViewDepth <= farZ;
+
+				if (inFrustum)
+				{
+					float prevSliceF = froxelDepthToSlice(prevViewDepth, nearZ, farZ);
+
+					vec4 hist = textureLod(inHistory,
+						vec3(prevUV, prevSliceF / float(FROXEL_Z)), 0.0);
+
+					hist.rgb *= getPreExposureDelta();
+
+					resolved = mix(raw, hist, clamp(pc.historyWeight, 0.0, 0.98));
+				}
+			}
+		}
+
+		imageStore(outResolved, ivec3(cell, int(s)), resolved);
+	}
+}

@@ -20,6 +20,7 @@
     <Filter Include="src\renderer\backend\nrd" />
     <Filter Include="src\renderer\backend\descriptors" />
     <Filter Include="src\renderer\backend\pipelines" />
+    <Filter Include="src\renderer\backend\shaders" />
     <Filter Include="src\renderer\frame" />
     <Filter Include="src\renderer\scene" />
     <Filter Include="src\renderer\rendergraph" />
@@ -36,9 +37,12 @@
     <Filter Include="res\shaders\core" />
     <Filter Include="res\shaders\deprecated" />
     <Filter Include="res\shaders\ssgi" />
+    <Filter Include="res\shaders\world_probes" />
+    <Filter Include="res\shaders\volumetric_fog" />
     <Filter Include="res\shaders\reflections" />
     <Filter Include="res\shaders\debug" />
     <Filter Include="res\shaders\environment" />
+    <Filter Include="res\shaders\sky" />
     <Filter Include="res\shaders\include" />
     <Filter Include="res\shaders\post_process" />
     <Filter Include="res\shaders\shadows" />
@@ -76,6 +80,9 @@
     <ClCompile Include="src\profiler\EditorImgui.cpp">
       <Filter>src\profiler</Filter>
     </ClCompile>
+    <ClCompile Include="src\profiler\ShaderEditorPanel.cpp">
+      <Filter>src\profiler</Filter>
+    </ClCompile>
     <!-- input -->
     <ClCompile Include="src\input\Camera.cpp">
       <Filter>src\input</Filter>
@@ -84,9 +91,6 @@
       <Filter>src\input</Filter>
     </ClCompile>
     <!-- renderer (root) -->
-    <ClCompile Include="src\renderer\Renderer.cpp">
-      <Filter>src\renderer</Filter>
-    </ClCompile>
     <!-- renderer / graph -->
     <ClCompile Include="src\renderer\rendergraph\RenderGraphExecute.cpp">
       <Filter>src\renderer\rendergraph</Filter>
@@ -108,9 +112,6 @@
       <Filter>src\renderer\rendergraph\passes\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\renderer\rendergraph\passes\graphics\ThePrepass.cpp">
-      <Filter>src\renderer\rendergraph\passes\graphics</Filter>
-    </ClCompile>
-    <ClCompile Include="src\renderer\rendergraph\passes\graphics\SkyboxPass.cpp">
       <Filter>src\renderer\rendergraph\passes\graphics</Filter>
     </ClCompile>
     <ClCompile Include="src\renderer\rendergraph\passes\graphics\TransparentForwardPass.cpp">
@@ -142,9 +143,6 @@
       <Filter>src\renderer\rendergraph\passes\compute</Filter>
     </ClCompile>
     <ClCompile Include="src\renderer\rendergraph\passes\compute\ScreenSpaceContactShadowsPass.cpp">
-      <Filter>src\renderer\rendergraph\passes\compute</Filter>
-    </ClCompile>
-    <ClCompile Include="src\renderer\rendergraph\passes\compute\ScreenSpaceVolumetricLightPass.cpp">
       <Filter>src\renderer\rendergraph\passes\compute</Filter>
     </ClCompile>
     <ClCompile Include="src\renderer\rendergraph\passes\compute\HDRSceneCompositePass.cpp">
@@ -223,6 +221,15 @@
     </ClCompile>
     <ClCompile Include="src\renderer\backend\pipelines\PipelineManager.cpp">
       <Filter>src\renderer\backend\pipelines</Filter>
+    </ClCompile>
+    <ClCompile Include="src\renderer\backend\shaders\ShaderCompiler.cpp">
+      <Filter>src\renderer\backend\shaders</Filter>
+    </ClCompile>
+    <ClCompile Include="src\renderer\backend\shaders\ShaderCache.cpp">
+      <Filter>src\renderer\backend\shaders</Filter>
+    </ClCompile>
+    <ClCompile Include="src\renderer\backend\shaders\ShaderHotReload.cpp">
+      <Filter>src\renderer\backend\shaders</Filter>
     </ClCompile>
     <ClCompile Include="src\renderer\backend\ImageUtils.cpp">
       <Filter>src\renderer\backend</Filter>
@@ -409,6 +416,9 @@
     <ClCompile Include="src\renderer\rendergraph\passes\compute\VolumetricFogPass.cpp">
       <Filter>src\renderer\rendergraph\passes\compute</Filter>
     </ClCompile>
+    <ClCompile Include="src\renderer\rendergraph\passes\compute\AtmosphericSkyPass.cpp">
+      <Filter>src\renderer\rendergraph\passes\compute</Filter>
+    </ClCompile>
     <ClCompile Include="src\renderer\rendergraph\passes\graphics\VolumetricShadowMap.cpp">
       <Filter>src\renderer\rendergraph\passes\graphics</Filter>
     </ClCompile>
@@ -417,6 +427,18 @@
     </ClCompile>
     <ClCompile Include="src\renderer\backend\pipelines\PipelineTable.cpp">
       <Filter>src\renderer\backend\pipelines</Filter>
+    </ClCompile>
+    <ClCompile Include="src\renderer\rendergraph\passes\compute\WorldProbesPass.cpp">
+      <Filter>src\renderer\rendergraph\passes\compute</Filter>
+    </ClCompile>
+    <ClCompile Include="src\renderer\Renderer.cpp">
+      <Filter>src\renderer</Filter>
+    </ClCompile>
+    <ClCompile Include="src\renderer\scene\WorldProbes.cpp">
+      <Filter>src\renderer\scene</Filter>
+    </ClCompile>
+    <ClCompile Include="src\renderer\scene\RendererAssetUpload.cpp">
+      <Filter>src\renderer\scene</Filter>
     </ClCompile>
   </ItemGroup>
   <!-- ===================== Headers ===================== -->
@@ -485,6 +507,9 @@
     <ClInclude Include="src\profiler\EditorImgui.h">
       <Filter>src\profiler</Filter>
     </ClInclude>
+    <ClInclude Include="src\profiler\ShaderEditorPanel.h">
+      <Filter>src\profiler</Filter>
+    </ClInclude>
     <!-- renderer -->
     <ClInclude Include="src\renderer\RendererDefinitions.h">
       <Filter>src\renderer</Filter>
@@ -535,6 +560,12 @@
     <ClInclude Include="src\renderer\scene\DrawPreparation.h">
       <Filter>src\renderer\scene</Filter>
     </ClInclude>
+    <ClInclude Include="src\renderer\scene\AtmosphereState.h">
+      <Filter>src\renderer\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="src\renderer\scene\AtmosphereTypes.h">
+      <Filter>src\renderer\scene</Filter>
+    </ClInclude>
     <!-- renderer / backend -->
     <ClInclude Include="src\renderer\backend\Device.h">
       <Filter>src\renderer\backend</Filter>
@@ -559,6 +590,15 @@
     </ClInclude>
     <ClInclude Include="src\renderer\backend\pipelines\PipelineManager.h">
       <Filter>src\renderer\backend\pipelines</Filter>
+    </ClInclude>
+    <ClInclude Include="src\renderer\backend\shaders\ShaderCompiler.h">
+      <Filter>src\renderer\backend\shaders</Filter>
+    </ClInclude>
+    <ClInclude Include="src\renderer\backend\shaders\ShaderCache.h">
+      <Filter>src\renderer\backend\shaders</Filter>
+    </ClInclude>
+    <ClInclude Include="src\renderer\backend\shaders\ShaderHotReload.h">
+      <Filter>src\renderer\backend\shaders</Filter>
     </ClInclude>
     <ClInclude Include="src\renderer\backend\VulkanExtensionFunctions.h">
       <Filter>src\renderer\backend</Filter>
@@ -668,13 +708,19 @@
     <ClInclude Include="src\renderer\backend\pipelines\PipelineTable.h">
       <Filter>src\renderer\backend\pipelines</Filter>
     </ClInclude>
+    <ClInclude Include="src\renderer\scene\LightUnits.h">
+      <Filter>src\renderer\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="src\renderer\scene\WorldProbeTypes.h">
+      <Filter>src\renderer\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="src\renderer\scene\WorldProbeBudget.h">
+      <Filter>src\renderer\scene</Filter>
+    </ClInclude>
   </ItemGroup>
   <!-- ===================== Shaders/Assets (None) ===================== -->
   <ItemGroup>
     <None Include="build_nrd.bat" />
-    <None Include="res\shaders\compile_shaders.bat">
-      <Filter>res\shaders</Filter>
-    </None>
     <!-- ssgi -->
     <None Include="res\shaders\ssgi\hi_z_prefilter.comp">
       <Filter>res\shaders\ssgi</Filter>
@@ -735,9 +781,6 @@
     <None Include="res\shaders\core\rt_ray_args.comp">
       <Filter>res\shaders\core</Filter>
     </None>
-    <None Include="res\shaders\include\rt_params.glsl">
-      <Filter>res\shaders\include</Filter>
-    </None>
     <!-- debug -->
     <None Include="res\shaders\debug\line_debugVS.vert">
       <Filter>res\shaders\debug</Filter>
@@ -747,12 +790,6 @@
     </None>
     <!-- environment -->
     <None Include="res\shaders\environment\hdr2cubemap.comp">
-      <Filter>res\shaders\environment</Filter>
-    </None>
-    <None Include="res\shaders\environment\skyboxVS.vert">
-      <Filter>res\shaders\environment</Filter>
-    </None>
-    <None Include="res\shaders\environment\skyboxFS.frag">
       <Filter>res\shaders\environment</Filter>
     </None>
     <None Include="res\shaders\environment\specular_prefilter.comp">
@@ -765,6 +802,9 @@
       <Filter>res\shaders\environment</Filter>
     </None>
     <!-- include -->
+    <None Include="res\shaders\include\rt_params.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
     <None Include="res\shaders\include\common.glsl">
       <Filter>res\shaders\include</Filter>
     </None>
@@ -778,6 +818,72 @@
       <Filter>res\shaders\include</Filter>
     </None>
     <None Include="res\shaders\include\pbr.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\atmosphere.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\atmosphere_math.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\atmosphere_lighting.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\froxel.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\culling.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\bindings.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\instances.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\draws.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\barycentric.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\visbuffer.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\lighting.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\debug_views.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\meshlet_cull.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\depth.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\reflect_common.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\rt_geometry.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\rt_core.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\rt_sampling.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\rt_shadow.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\rt_shade.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\rt_shadow_common.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\textures.glsl">
       <Filter>res\shaders\include</Filter>
     </None>
     <!-- post_process -->
@@ -802,11 +908,28 @@
     <None Include="res\shaders\post_process\taa.comp">
       <Filter>res\shaders\post_process</Filter>
     </None>
-    <None Include="res\shaders\post_process\vol_light_blur.comp">
-      <Filter>res\shaders\post_process</Filter>
+    <!-- volumetric fog -->
+    <None Include="res\shaders\volumetric_fog\froxel_inject.comp">
+      <Filter>res\shaders\volumetric_fog</Filter>
     </None>
-    <None Include="res\shaders\post_process\vol_light_raymarch.comp">
-      <Filter>res\shaders\post_process</Filter>
+    <None Include="res\shaders\volumetric_fog\froxel_reproject.comp">
+      <Filter>res\shaders\volumetric_fog</Filter>
+    </None>
+    <None Include="res\shaders\volumetric_fog\froxel_integrate.comp">
+      <Filter>res\shaders\volumetric_fog</Filter>
+    </None>
+    <!-- sky -->
+    <None Include="res\shaders\sky\atmosphere_transmittance.comp">
+      <Filter>res\shaders\sky</Filter>
+    </None>
+    <None Include="res\shaders\sky\atmosphere_lighting.comp">
+      <Filter>res\shaders\sky</Filter>
+    </None>
+    <None Include="res\shaders\sky\sky_view.comp">
+      <Filter>res\shaders\sky</Filter>
+    </None>
+    <None Include="res\shaders\sky\sky_render.comp">
+      <Filter>res\shaders\sky</Filter>
     </None>
     <!-- shadows -->
     <None Include="res\shaders\shadows\bend_sss.comp">
@@ -824,18 +947,6 @@
     </None>
     <None Include="res\shaders\post_process\bloom_upsample.comp">
       <Filter>res\shaders\post_process</Filter>
-    </None>
-    <None Include="res\shaders\include\culling.glsl">
-      <Filter>res\shaders\include</Filter>
-    </None>
-    <None Include="res\shaders\include\bindings.glsl">
-      <Filter>res\shaders\include</Filter>
-    </None>
-    <None Include="res\shaders\include\instances.glsl">
-      <Filter>res\shaders\include</Filter>
-    </None>
-    <None Include="res\shaders\include\draws.glsl">
-      <Filter>res\shaders\include</Filter>
     </None>
     <None Include="res\shaders\shadows\shadow_bounds.comp">
       <Filter>res\shaders\shadows</Filter>
@@ -861,26 +972,14 @@
     <None Include="res\shaders\debug\debug_build.comp">
       <Filter>res\shaders\debug</Filter>
     </None>
-    <None Include="res\shaders\include\barycentric.glsl">
-      <Filter>res\shaders\include</Filter>
-    </None>
-    <None Include="res\shaders\include\visbuffer.glsl">
-      <Filter>res\shaders\include</Filter>
-    </None>
     <None Include="res\shaders\core\material_resolve.comp">
       <Filter>res\shaders\core</Filter>
     </None>
     <None Include="res\shaders\core\opaque_lighting.comp">
       <Filter>res\shaders\core</Filter>
     </None>
-    <None Include="res\shaders\include\lighting.glsl">
-      <Filter>res\shaders\include</Filter>
-    </None>
     <None Include="res\shaders\debug\gbuffer_view.comp">
       <Filter>res\shaders\debug</Filter>
-    </None>
-    <None Include="res\shaders\include\debug_views.glsl">
-      <Filter>res\shaders\include</Filter>
     </None>
     <None Include="res\shaders\shadows\shadowM.mesh">
       <Filter>res\shaders\shadows</Filter>
@@ -897,17 +996,11 @@
     <None Include="res\shaders\visibility\meshlet_cull.task">
       <Filter>res\shaders\visibility</Filter>
     </None>
-    <None Include="res\shaders\include\meshlet_cull.glsl">
-      <Filter>res\shaders\include</Filter>
-    </None>
     <None Include="res\shaders\visibility\prepass_masked_mesh.mesh">
       <Filter>res\shaders\visibility</Filter>
     </None>
     <None Include="res\shaders\core\velocity_resolve.comp">
       <Filter>res\shaders\core</Filter>
-    </None>
-    <None Include="res\shaders\include\depth.glsl">
-      <Filter>res\shaders\include</Filter>
     </None>
     <None Include="res\shaders\deprecated\cmaa2_deferred_resolve.comp">
       <Filter>res\shaders\deprecated</Filter>
@@ -936,20 +1029,11 @@
     <None Include="res\shaders\deprecated\cmaa2.glsl">
       <Filter>res\shaders\deprecated</Filter>
     </None>
-    <None Include="res\shaders\post_process\vol_light_resolve.comp">
-      <Filter>res\shaders\post_process</Filter>
-    </None>
     <None Include="res\shaders\core\tlas_instances.comp">
       <Filter>res\shaders\core</Filter>
     </None>
     <None Include="res\shaders\reflections\reflect_classify.comp">
       <Filter>res\shaders\reflections</Filter>
-    </None>
-    <None Include="res\shaders\include\reflect_common.glsl">
-      <Filter>res\shaders\include</Filter>
-    </None>
-    <None Include="res\shaders\include\rt_geometry.glsl">
-      <Filter>res\shaders\include</Filter>
     </None>
     <None Include="res\shaders\clustered\transparent_cluster_bounds.comp">
       <Filter>res\shaders\clustered</Filter>
@@ -960,28 +1044,13 @@
     <None Include="res\shaders\shadows\shadow_masked.mesh">
       <Filter>res\shaders\shadows</Filter>
     </None>
-    <None Include="res\shaders\reflections\rtreflect_trace.comp">
+    <None Include="res\shaders\reflections\rt_reflect_trace.comp">
       <Filter>res\shaders\reflections</Filter>
     </None>
-    <None Include="res\shaders\include\rt_core.glsl">
-      <Filter>res\shaders\include</Filter>
-    </None>
-    <None Include="res\shaders\include\rt_sampling.glsl">
-      <Filter>res\shaders\include</Filter>
-    </None>
-    <None Include="res\shaders\include\rt_shadow.glsl">
-      <Filter>res\shaders\include</Filter>
-    </None>
-    <None Include="res\shaders\include\rt_shade.glsl">
-      <Filter>res\shaders\include</Filter>
-    </None>
-    <None Include="res\shaders\include\rt_shadow_common.glsl">
-      <Filter>res\shaders\include</Filter>
-    </None>
-    <None Include="res\shaders\shadows\rtshadow_trace.comp">
+    <None Include="res\shaders\shadows\rt_shadow_trace.comp">
       <Filter>res\shaders\shadows</Filter>
     </None>
-    <None Include="res\shaders\shadows\rtshadow_classify.comp">
+    <None Include="res\shaders\shadows\rt_shadow_classify.comp">
       <Filter>res\shaders\shadows</Filter>
     </None>
     <None Include="res\shaders\core\transparent_cull.task">
@@ -996,11 +1065,77 @@
     <None Include="res\shaders\post_process\cas.comp">
       <Filter>res\shaders\post_process</Filter>
     </None>
-    <None Include="res\shaders\shadows\rtshadow_volume_build.comp">
+    <None Include="res\shaders\shadows\rt_shadow_volume_build.comp">
       <Filter>res\shaders\shadows</Filter>
     </None>
-    <None Include="res\shaders\shadows\rtshadow_invalid_mask.comp">
+    <None Include="res\shaders\shadows\rt_shadow_invalid_mask.comp">
       <Filter>res\shaders\shadows</Filter>
+    </None>
+    <None Include="res\shaders\include\world_probe.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\world_probe_rt.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\world_probes\wp_inject.comp">
+      <Filter>res\shaders\world_probes</Filter>
+    </None>
+    <None Include="res\shaders\world_probes\wp_sky_trace.comp">
+      <Filter>res\shaders\world_probes</Filter>
+    </None>
+    <None Include="res\shaders\world_probes\wp_prepare.comp">
+      <Filter>res\shaders\world_probes</Filter>
+    </None>
+    <None Include="res\shaders\world_probes\wp_relocate.comp">
+      <Filter>res\shaders\world_probes</Filter>
+    </None>
+    <None Include="res\shaders\world_probes\wp_debug.comp">
+      <Filter>res\shaders\world_probes</Filter>
+    </None>
+    <None Include="res\shaders\world_probes\wp_relight.comp">
+      <Filter>res\shaders\world_probes</Filter>
+    </None>
+    <None Include="res\shaders\include\world_probe_resolve.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\world_probes\wp_resolve.comp">
+      <Filter>res\shaders\world_probes</Filter>
+    </None>
+    <None Include="res\shaders\ssgi\ao_temporal.comp">
+      <Filter>res\shaders\ssgi</Filter>
+    </None>
+    <None Include="res\shaders\include\ssgi_push.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\world_probe_cache_common.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\world_probe_surface.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\world_probe_packing.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\world_probe_coefficients.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\world_probe_cache.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\include\world_probe_types.glsl">
+      <Filter>res\shaders\include</Filter>
+    </None>
+    <None Include="res\shaders\world_probes\wp_reconstruct.comp">
+      <Filter>res\shaders\world_probes</Filter>
+    </None>
+    <None Include="res\shaders\world_probes\wp_cache_resolve.comp">
+      <Filter>res\shaders\world_probes</Filter>
+    </None>
+    <None Include="res\shaders\world_probes\wp_sky_mean.comp">
+      <Filter>res\shaders\world_probes</Filter>
+    </None>
+    <None Include="res\shaders\world_probes\wp_cache_fallback.comp">
+      <Filter>res\shaders\world_probes</Filter>
     </None>
   </ItemGroup>
 </Project>

@@ -1,4 +1,4 @@
-#version 450
+#version 460
 
 #extension GL_GOOGLE_include_directive : require
 #extension GL_ARB_separate_shader_objects : require
@@ -31,7 +31,6 @@ void addVisibleStats(uint mask)
 		case VIS_SLOT_CSM0:
 		case VIS_SLOT_CSM1:
 		case VIS_SLOT_CSM2:
-		case VIS_SLOT_CSM3:
 		case VIS_SLOT_VOLUMETRIC:
 			atomicAdd(getGPUStatsBuffer().gpuStats.visibleShadowCasters, 1u);
 			return;
@@ -147,7 +146,7 @@ void main()
 
 		uvec4 activeCascades = shadowCull.data.cascadeActive;
 
-		for (uint c = 0u; c < MAX_CASCADES; ++c)
+		for (uint c = 0u; c < uint(csm.params.y); ++c)
 		{
 			// cascade deactivation
 			uint isActive = (c == 0u) ? activeCascades.x : (c == 1u) ? activeCascades.y
@@ -188,7 +187,8 @@ void main()
 		//
 		// Trees get more leniency because their small-scale
 		// silhouette contributes strongly to light shafts.
-		float minRadius = volShadow.cascadeWorldTexel * (isFoliage ? 0.5 : 1.0);
+		const float cascadeWorldTexel = volShadow.params.y;
+		float minRadius = cascadeWorldTexel * (isFoliage ? 0.5 : 1.0);
 
 		if (radius >= minRadius &&
 			casterOverlapsVolumetricReceivers(

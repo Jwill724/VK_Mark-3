@@ -23,18 +23,13 @@ const float PI      = 3.1415926535897932384626433832795;
 const float HALF_PI = 1.5707963267948966192313216916398;
 const float TWO_PI  = 6.2831853;
 
-const float EMISSIVE_STRENGTH_BOOST = 3.0f;
-
-const uint MAX_CASCADES = 4u;
+const uint MAX_CASCADES = 3u;
 
 const uint MAX_ENV_SETS = 8u;
 
 const uint AA_OFF     = 0u;
 const uint AA_TAA     = 1u;
 const uint AA_TAA_CAS = 2u;
-
-//const uint TM_ACESFILM = 0u;
-//const uint TM_GT7      = 1u;
 
 const uint SUN_SHADOW_FILTER_PCF              = 0u;
 const uint SUN_SHADOW_FILTER_PCSS             = 1u;
@@ -47,6 +42,8 @@ const uint VBGI  = 2u;
 const uint MAX_FLT_UINT = 0x7F7FFFFFu;
 
 const uint MAX_LUMINANCE_GROUPS = 65536u;
+
+const float LIGHT_CULL_NITS = 0.05;
 
 const float COLOR_HISTORY_MAX  = 65504.0;  // RGBA16F
 const float RESOLVE_TARGET_MAX = 64512.0;  // r11f_g11f_b10f
@@ -147,7 +144,7 @@ struct SceneData
 	// w = previous jitter y
 	vec4 sunlightDirection;
 	vec4 sunlightColor; // .w = power
-	vec4 cameraPos;           // xyz pos, .w exposure
+	vec4 cameraPos;           // xyz pos
 	vec4 cameraClips;         // .x near and .y far, .z invScreenWidth, .w invScreenHeight
 
 	vec4 renderExtentSize; // .x and .y for width and height, .z for pixel count
@@ -161,7 +158,21 @@ struct SceneData
 	vec2 ndcToViewMult;        // tanHalfFov.x *  2, tanHalfFov.y * -2
 	vec2 ndcToViewAdd;         // tanHalfFov.x * -1, tanHalfFov.y *  1
 	mat4 flashlightVP;
+
+	vec4 atmosphereRayleigh;
+	vec4 atmosphereMie;
+	vec4 atmosphereAbsorption;
+	vec4 atmosphereGeometry;
+	uvec4 atmosphereIntegration;
+
+	vec4 atmospherePlacement;
+	vec4 atmosphereScattering;
+	vec4 atmosphereSun;
+	vec4 atmosphereGround;
+
+	RenderTargetIDs renderTargetIDs;
 };
+
 
 struct GPUAddressTable
 {
@@ -368,6 +379,30 @@ void SMAAMovc(bvec4 cond, inout vec4 variable, vec4 value) {
 	SMAAMovc(cond.zw, variable.zw, value.zw);
 }
 
+vec3 linearToSRGB(vec3 x)
+{
+	x = max(x, vec3(0.0));
+
+	bvec3 lo = lessThanEqual(x, vec3(0.0031308));
+
+	vec3 low  = x * 12.92;
+	vec3 high = 1.055 * pow(x, vec3(1.0 / 2.4)) - 0.055;
+
+	return mix(high, low, lo);
+}
+
+vec3 sRGBToLinear(vec3 x)
+{
+	x = max(x, vec3(0.0));
+
+	bvec3 lo = lessThanEqual(x, vec3(0.04045));
+
+	vec3 low  = x / 12.92;
+	vec3 high = pow((x + 0.055) / 1.055, vec3(2.4));
+
+	return mix(high, low, lo);
+}
+
 float interleavedGradientNoise(vec2 pixel) {
 	const vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
 	return fract(magic.z * fract(dot(pixel, magic.xy)));
@@ -502,6 +537,7 @@ struct LocalLight {
 	float sourceLength;
 
 	float changeRate;
+	float lumens;
 };
 
 struct ShadowCSM {
@@ -537,16 +573,12 @@ struct VolumetricShadowInfo
 	mat4 cascadeLightView;
 	vec4 params;
 	// x = shadow map ID
-	// y = enabled
+	// y = cascadeWorldTexel
 	// z = shadow texel size
 	// w = light-space epsilon
 
 	vec4 receiverLSMin;
 	vec4 receiverLSMax;
-
-	float cascadeWorldTexel;
-
-	float pad0[3];
 };
 
 struct ClusteredData {
@@ -597,8 +629,8 @@ struct DebugToggles
 
 	uint activeRTInstances;
 	uint csmAtlasCached;
+	uint worldProbesDebugView;
 	uint pad0;
-	uint pad1;
 };
 
 bool uintBool(uint x) { return x != 0u; }
@@ -616,6 +648,18 @@ uint64_t getABTGlobalAddress(uint id) { return globalAddressTable.addrs[id]; }
 // === GLOBAL uniform sets ===
 // ===========================
 
+struct AtmosphereResource
+{
+	uvec4 textureIDs; // x transmittance; y skyView, z lighting atlas  w unused.
+	uvec4 transmittanceExtent;
+};
+
+layout(set = GLOBAL_SET, binding = GLOBAL_BINDING_ATMOSPHERE, scalar) uniform AtmosphereResourceUBO
+{
+	AtmosphereResource atmosphere;
+};
+AtmosphereResource getAtmosphereResourceUBO() { return atmosphere; }
+
 layout(set = GLOBAL_SET, binding = GLOBAL_BINDING_DEBUG_INLINE, scalar) uniform DebugData {
 	DebugToggles debug;
 };
@@ -623,6 +667,7 @@ layout(set = GLOBAL_SET, binding = GLOBAL_BINDING_DEBUG_INLINE, scalar) uniform 
 DebugToggles getDebugToggles() { return debug; }
 
 bool IsTAAEnabled() { return debug.aaMode != AA_OFF; }
+
 
 // ============================================
 // === GLOBAL ADDRESSS TABLE BUFFER GETTERS ===
@@ -634,8 +679,7 @@ layout(buffer_reference, scalar) readonly buffer InstanceInputsBuffer {
 };
 // pass gl_InstanceIndex
 InstanceInputsBuffer getInstanceInputBuffer() {
-	uint64_t addr = getABTGlobalAddress(ABT_InstanceInputs);
-	return InstanceInputsBuffer(addr);
+	return InstanceInputsBuffer(getABTGlobalAddress(ABT_InstanceInputs));
 }
 
 layout(buffer_reference, scalar) readonly buffer DrawBinKeysBuffer {
@@ -695,14 +739,24 @@ MeshBuffer getMeshBuffer() {
 	return MeshBuffer(addr);
 }
 
-// .x = exposure when applied in final tone map stage
-// .y = average luminance
+const float EXPOSURE_MIN = 1e-9;
+
 layout(buffer_reference, scalar) buffer LuminanceBuffer {
 	vec4 luminanceSums[MAX_LUMINANCE_GROUPS];
 };
 LuminanceBuffer getLuminanceBuffer() {
 	uint64_t addr = getABTGlobalAddress(ABT_Luminance);
 	return LuminanceBuffer(addr);
+}
+
+float getPreExposure()      { return max(getLuminanceBuffer().luminanceSums[0].x, EXPOSURE_MIN); }
+float getPrevPreExposure()  { return max(getLuminanceBuffer().luminanceSums[0].y, EXPOSURE_MIN); }
+float getPreExposureDelta() { return getPreExposure() / getPrevPreExposure(); }
+
+vec3 sanitizeHDR(vec3 c, float maxValue)
+{
+	c = mix(c, vec3(0.0), isnan(c));
+	return clamp(c, vec3(0.0), vec3(maxValue));
 }
 
 layout(buffer_reference, scalar) readonly buffer MeshletBuffer { Meshlet meshlets[]; };
@@ -733,14 +787,6 @@ struct SphericalHarmonic
 {
 	vec3 sh[9];
 };
-
-layout(buffer_reference, scalar) buffer SHIrradianceBuffer {
-	SphericalHarmonic shIrr[MAX_ENV_SETS];
-};
-SHIrradianceBuffer getSHIrradianceBuffer() {
-	uint64_t addr = getABTGlobalAddress(ABT_SHIrradiance);
-	return SHIrradianceBuffer(addr);
-}
 
 layout(buffer_reference, scalar) readonly buffer BlasAddressesBuffer {
 	uvec2 blasAddrs[];
@@ -794,15 +840,6 @@ VisibleInstanceBuffer getVisibleInstanceBuffer() {
 	uint64_t addr = getABTFrameAddress(ABT_VisibleInstances);
 	return VisibleInstanceBuffer(addr);
 }
-
-//// indirect draws
-//layout(buffer_reference, scalar) buffer IndirectDrawBuffer {
-//	IndirectIndexedDrawCmd indirectDraws[];
-//};
-//IndirectDrawBuffer getIndirectDrawBuffer() {
-//	uint64_t addr = getABTFrameAddress(ABT_IndirectDraws);
-//	return IndirectDrawBuffer(addr);
-//}
 
 // pass gl_InstanceIndex
 layout(buffer_reference, scalar) buffer DrawInstanceIDsBuffer {
@@ -894,8 +931,7 @@ IndirectDrawCountsBuffer getIndirectDrawCountsBuffer() {
 //	VisibilityCounters c = getInstanceVisibilityBuffer().counters;
 //	return (c.counts[VIS_SLOT_CSM0] +
 //			c.counts[VIS_SLOT_CSM1] +
-//			c.counts[VIS_SLOT_CSM2] +
-//			c.counts[VIS_SLOT_CSM3]) > 0u;
+//			c.counts[VIS_SLOT_CSM2]) > 0u;
 //}
 //
 //bool hasCascadeCasters(uint cascadeSlot)
@@ -1108,7 +1144,6 @@ ClusterTileTransparentNear getClusterTileTransparentNearBuffer() {
 	return ClusterTileTransparentNear(addr);
 }
 
-
 struct ShadowInvalidVolume
 {
 	vec3 boundsMin;
@@ -1125,116 +1160,40 @@ ShadowInvalidVolumesBuffer getShadowInvalidVolumesBuffer() {
 	return ShadowInvalidVolumesBuffer(addr);
 }
 
-// ==============================
-// === GLOBAL BINDLESS IMAGES ===
-// ==============================
-layout(set = GLOBAL_SET, binding = GLOBAL_BINDING_SAMPLER_CUBE)
-uniform samplerCube envMaps[];
+layout(buffer_reference, scalar) buffer VolClusterCounts {
+	uint counts[];
+};
 
-layout(set = GLOBAL_SET, binding = GLOBAL_BINDING_COMBINED_SAMPLER)
-uniform sampler2D combinedSamplers[];
-
-layout(set = GLOBAL_SET, binding = GLOBAL_BINDING_COMBINED_SAMPLER)
-uniform usampler2D combinedSamplersU[];
-
-#define TEX2D(id) combinedSamplers[nonuniformEXT(id)]
-#define TEXU2D(id) combinedSamplersU[nonuniformEXT(id)]
-#define TEXCUBE(id) envMaps[nonuniformEXT(id)]
-
-#define INVALID_TEXTURE_ID 0xFFFFFFFFu
-
-vec4 SampleTexture(uint id, vec2 uv) {
-	if (id == INVALID_TEXTURE_ID) {
-		return vec4(1.0);
-	}
-	return texture(TEX2D(id), uv);
+VolClusterCounts getVolClusterCountsBuffer() {
+	uint64_t addr = getABTFrameAddress(ABT_VolClusterCounts);
+	return VolClusterCounts(addr);
 }
 
-uvec4 SampleTexelFetch(uint id, ivec2 uv, int lod) {
-	if (id == INVALID_TEXTURE_ID) {
-		return uvec4(1u);
-	}
-	return texelFetch(TEXU2D(id), uv, lod);
+layout(buffer_reference, scalar) buffer VolClusterOffsets {
+	uint offsets[];
+};
+
+VolClusterOffsets getVolClusterOffsetsBuffer() {
+	uint64_t addr = getABTFrameAddress(ABT_VolClusterOffsets);
+	return VolClusterOffsets(addr);
 }
 
-vec4 SampleTextureLod(uint id, vec2 uv, float lod) {
-	if (id == INVALID_TEXTURE_ID) {
-		return vec4(1.0);
-	}
-	return textureLod(TEX2D(id), uv, lod);
+layout(buffer_reference, scalar) buffer VolClusterLightIDs {
+	uint lightIDs[];
+};
+
+VolClusterLightIDs getVolClusterLightIDsBuffer() {
+	uint64_t addr = getABTFrameAddress(ABT_VolClusterLightIDs);
+	return VolClusterLightIDs(addr);
 }
 
-vec4 SampleTextureGrad(uint id, vec2 uv, vec2 dx, vec2 dy) {
-	if (id == INVALID_TEXTURE_ID) {
-		return vec4(1.0);
-	}
-	return textureGrad(TEX2D(id), uv, dx, dy);
-}
+layout(buffer_reference, scalar) buffer VolClusterCursors {
+	uint cursors[];
+};
 
-vec4 SampleTextureGradTAA(uint id, vec2 uv, vec2 dx, vec2 dy, float artBias) {
-	if (id == INVALID_TEXTURE_ID) {
-		return vec4(1.0);
-	}
-
-	vec4  taa   = getSceneData().taaMipParams;
-	float scale = exp2(artBias);
-
-	if (taa.x != 0.0) {
-		vec2  texSize = vec2(textureSize(TEX2D(id), 0));
-		float rho     = max(length(dx * texSize), length(dy * texSize));
-		float lod     = log2(max(rho, 1e-6)) + artBias;
-		float fade    = 1.0 - saturate((lod - taa.y) * taa.z);
-		scale = exp2(artBias + taa.x * fade);
-	}
-
-	return textureGrad(TEX2D(id), uv, dx * scale, dy * scale);
-}
-
-vec4 SampleTextureBiasTAA(uint id, vec2 uv, float artBias) {
-	if (id == INVALID_TEXTURE_ID) {
-		return vec4(1.0);
-	}
-#if defined(GL_FRAGMENT_SHADER) || defined(FRAGMENT_SHADER)
-	vec4  taa  = getSceneData().taaMipParams;
-	float lod  = textureQueryLod(TEX2D(id), uv).y + artBias;
-	float fade = 1.0 - saturate((lod - taa.y) * taa.z);
-	return texture(TEX2D(id), uv, artBias + taa.x * fade);
-#else
-	return textureLod(TEX2D(id), uv, 0.0);
-#endif
-}
-
-vec4 SampleCube(uint id, vec3 dir) {
-	if (id == INVALID_TEXTURE_ID) {
-		return vec4(0.0);
-	}
-	return texture(TEXCUBE(id), dir);
-}
-
-vec4 SampleCubeLod(uint id, vec3 dir, float lod) {
-	if (id == INVALID_TEXTURE_ID) {
-		return vec4(0.0);
-	}
-	return textureLod(TEXCUBE(id), dir, lod);
-}
-
-int SampleCubeQueryLevels(uint id) {
-	if (id == INVALID_TEXTURE_ID) {
-		return 0;
-	}
-	return textureQueryLevels(TEXCUBE(id));
-}
-
-vec4 SampleTextureBias(uint id, vec2 uv, float bias) {
-	if (id == INVALID_TEXTURE_ID) {
-		return vec4(1.0);
-	}
-// Only the fragment path is used, allows compilation in compute shader
-#if defined(GL_FRAGMENT_SHADER) || defined(FRAGMENT_SHADER)
-	return texture(TEX2D(id), uv, bias);
-#else
-	return textureLod(TEX2D(id), uv, 0.0);
-#endif
+VolClusterCursors getVolClusterCursorsBuffer() {
+	uint64_t addr = getABTFrameAddress(ABT_VolClusterCursors);
+	return VolClusterCursors(addr);
 }
 
 void unpackVertex(
@@ -1264,17 +1223,13 @@ void unpackVertex(
 	tangent = octDecode(vec2(octX, octY));
 }
 
-vec2 SpatioTemporalNoise(ivec2 pixCoord, uint texId, uint noiseIndex) {
-	uint index = SampleTexelFetch(texId, ivec2(pixCoord % 64), 0).r;
-	index += 288u * noiseIndex;
-	return vec2(fract(0.5 + index * vec2(0.75487766624669276005, 0.5698402909980532659114)));
-}
-
 vec2 GetPrevUV(vec4 prevClip)
 {
 	vec2 prevUv = (prevClip.xy / prevClip.w) * 0.5 + 0.5;
 	prevUv.y    = 1.0 - prevUv.y;
 	return prevUv;
 }
+
+#include "textures.glsl"
 
 #endif

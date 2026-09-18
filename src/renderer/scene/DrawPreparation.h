@@ -45,5 +45,6 @@ namespace DrawPreparation
 		const std::vector<uint32_t>&      rtRows,
 		Scene&                            scene,
 		const std::vector<LocalLight>&    lights,
+		const glm::vec4                   defaultLuminance,
 		bool                              bMotionNeeded);
 }

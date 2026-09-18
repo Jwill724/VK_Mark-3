@@ -16,6 +16,9 @@ extern PFN_vkCmdSetCheckpointNV        pfn_vkCmdSetCheckpointNV;
 extern PFN_vkGetQueueCheckpointData2NV pfn_vkGetQueueCheckpointData2NV;
 extern PFN_vkCmdWriteBufferMarker2AMD  pfn_vkCmdWriteBufferMarker2AMD;
 
+extern PFN_vkQueueBeginDebugUtilsLabelEXT pfn_vkQueueBeginDebugUtilsLabelEXT;
+extern PFN_vkQueueEndDebugUtilsLabelEXT   pfn_vkQueueEndDebugUtilsLabelEXT;
+
 extern PFN_vkCreateAccelerationStructureKHR              pfn_vkCreateAccelerationStructureKHR;
 extern PFN_vkDestroyAccelerationStructureKHR             pfn_vkDestroyAccelerationStructureKHR;
 extern PFN_vkGetAccelerationStructureBuildSizesKHR       pfn_vkGetAccelerationStructureBuildSizesKHR;
@@ -33,6 +36,9 @@ bool DidExtensionLoadFail();
 #define vkCmdDrawMeshTasksIndirectCountEXT pfn_vkCmdDrawMeshTasksIndirectCountEXT
 
 #define vkGetDeviceFaultInfoEXT pfn_vkGetDeviceFaultInfoEXT
+
+#define vkQueueBeginDebugUtilsLabelEXT pfn_vkQueueBeginDebugUtilsLabelEXT
+#define vkQueueEndDebugUtilsLabelEXT   pfn_vkQueueEndDebugUtilsLabelEXT
 
 #define vkSetDebugUtilsObjectNameEXT  pfn_vkSetDebugUtilsObjectNameEXT
 #define vkCmdBeginDebugUtilsLabelEXT  pfn_vkCmdBeginDebugUtilsLabelEXT

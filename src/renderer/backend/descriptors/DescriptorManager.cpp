@@ -17,7 +17,7 @@ void DescriptorManager::InitDescriptors(VkDevice device)
 	std::vector<PoolSizeRatio> poolSizes
 	{
 		{ SSBO,             1.0f },
-		{ UNIFORM,          4.0f },
+		{ UNIFORM,          5.0f },
 		{ ACCEL_STRUCT,     1.0f },
 		{ COMBINED_SAMPLER, static_cast<float>(RD::MAX_SAMPLER_CUBE_IMAGES + RD::MAX_COMBINED_SAMPLERS_IMAGES)
 							/ static_cast<float>(RD::MAX_FRAMES_IN_FLIGHT) },
@@ -33,6 +33,7 @@ void DescriptorManager::InitDescriptors(VkDevice device)
 	ClearBinding();
 
 	AddBinding(RD::ADDRESS_TABLE_BINDING, SSBO, ALL_STAGES);
+	AddBinding(RD::GLOBAL_ATMOSPHERE_BINDING, UNIFORM, ALL_STAGES);
 	AddBinding(RD::GLOBAL_BINDING_DEBUG_INLINE, INLINE, ALL_STAGES, kDebugInlineBytes);
 
 	AddBinding(
@@ -81,7 +82,7 @@ void DescriptorManager::InitDescriptors(VkDevice device)
 	ClearBinding();
 
 	// Readable inputs
-	for (uint32_t i = RD::PUSH_BINDING_READ_1; i <= RD::PUSH_BINDING_READ_11; i++) {
+	for (uint32_t i = RD::PUSH_BINDING_READ_1; i <= RD::PUSH_BINDING_READ_10; i++) {
 		AddBinding(i, COMBINED_SAMPLER, IMAGE_STAGES);
 	}
 

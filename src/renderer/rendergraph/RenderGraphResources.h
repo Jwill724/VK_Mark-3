@@ -20,6 +20,10 @@ struct RenderResourceUsage
 
 	bool bIsWrite = false;
 	bool bManualExitTransition = false;
+
+	bool bRequireExistingState = false;
+
+	std::function<bool(const RD::RenderStateInfo&)> condition;
 };
 
 struct PipelineHandle;
@@ -36,6 +40,8 @@ class PipelineManager;
 class DescriptorManager;
 class NRDContext;
 struct RenderPassDesc;
+class AtmosphereState;
+struct WorldProbePush;
 
 struct RenderPassExecutionContext
 {
@@ -47,6 +53,9 @@ struct RenderPassExecutionContext
 	Profiler*                        profiler    = nullptr;
 	BindlessImageTable*              imageTable  = nullptr;
 	BindlessBDATable*                bufferTable = nullptr;
+
+	AtmosphereState*                 atmosphereState = nullptr;
+	const WorldProbePush*            worldProbePush = nullptr;
 
 	const Scene*                     scene       = nullptr;
 	const RD::RenderStateInfo*       frameState  = nullptr;

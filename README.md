@@ -1,3 +1,11 @@
+## Project Info
+
+VK Mark-3 began in February 2025 as a single triangle rendered from a single main file. Since then, the project has grown through several code-named **"Mark"** versions, with each major version representing a significant architectural shift or expansion of the renderer.
+
+Beyond serving as a portfolio project and long-term hobby, its primary purpose is to deepen my understanding of modern real-time rendering and engine architecture. The renderer is built around a philosophy of **fully dynamic real-time environments, GPU-driven rendering, and minimizing reliance on precomputed lighting or static scene data**. I believe that committing to these techniques is where much of the performance and scalability of modern rendering architectures can be realized, with engines such as **id Tech 8** demonstrating what is possible with this approach.
+
+The project is under continuous research and development, and many of its rendering systems are actively evolving as I experiment with new techniques, restructure existing systems, and push the architecture further.
+
 ## Features
 
 ### Rendering Architecture
@@ -7,7 +15,7 @@
 * GPU address table enabling a fully bindless indirect buffer architecture
 * GPU-driven instance culling and draw-command generation
 * Descriptor indexing for bindless resource access
-* Push descriptors for transient/runtime render targets
+* Push descriptors for transient render targets
 * Retained-mode render graph
 * Async compute with multithreaded secondary command-buffer recording
 * Multithreaded job system powered by EnkiTS
@@ -15,16 +23,20 @@
 ### Lighting & Shading
 
 * Physically based rendering using Cook–Torrance GGX with Disney diffuse
-* Split-sum image-based lighting with prefiltered specular environment maps and BRDF LUT
-* Spherical harmonic irradiance for diffuse environment lighting
+* Physically based light units: lumens for local light output, lux for illuminance, and nits for emissive luminance
+* Dynamic atmospheric sky and sun lighting inspired by techniques described for id Tech 8, replacing static environment-map lighting
+* Atmospheric scattering with Rayleigh and Mie scattering, absorption, and transmittance LUTs
+* Cascaded world-probe indirect lighting with ray-traced sky visibility and screen-space GI injection
+* Reduced-resolution probe lighting resolve with edge-aware reconstruction for opaque surfaces
+* Shared spatial lighting cache for transparent surfaces and volumetric fog
 * Clustered lighting for point, spot, and area lights
-* Screen-space global illumination using visibility-bitmask AO with indirect lighting (XeGTAO-based)
+* Screen-space global illumination and ambient occlusion using visibility bitmasks
 * Ray-traced reflections with NRD REBLUR denoising
 * Ray-traced soft sun shadows with NRD SIGMA denoising
 * Cascaded shadow maps with PCF and PCSS filtering
 * Screen-space contact shadows based on Bend Studio's technique
 * Shadow-mapped flashlight
-* Ray-marched directional volumetric lighting
+* Froxel-based volumetric fog with temporal reprojection, shadowed sunlight, local lights, and probe-based ambient lighting
 
 ### Geometry & Visibility
 
@@ -39,43 +51,45 @@
 
 * Temporal anti-aliasing (TAA)
 * Contrast Adaptive Sharpening (CAS)
-* ACES Film tonemapping
+* Gran Turismo-style (GT) tonemapping
+* Automatic exposure with EV100-based adaptation
 * Bloom
 * Lens flare
 * Chromatic aberration
-* Spartan Engine-inspired bloom and chromatic aberration implementations
 
 ### Assets & Tooling
 
 * glTF 2.0 cached asset pipeline
 * Block-compressed texture support
+* Runtime shader compilation, shader caching, and hot reloading
 * ImGui debugging and renderer controls
 * Tracy CPU/GPU profiling integration
 
-> **Legacy rendering paths**
->
-> Older anti-aliasing implementations are retained for reference, testing, and comparison. They are not part of the current rendering pipeline.
+### Legacy Rendering Paths
 
-* SMAA
-* CMAA2 (Intel)
-* FXAA
+Older anti-aliasing implementations are retained for reference, testing, and comparison. They are not part of the current rendering pipeline.
+
+- SMAA
+- CMAA2 (Intel)
+- FXAA
 
 ## Future
 
 * Runtime asset loading and management
 * Dynamic mesh, material, and light interactions
-* Auto exposure
-* Gran Turismo 7-style tonemapping
-* Physically based light units
-* Atmospheric scattering sky and sun model
 * Planar reflections
 * Parallax-corrected cubemaps
 * Water rendering
-* Froxel Volumetrics
-* DLSS
+* Spot light shadow atlas
+* DLSS/FSR
 * Ray-traced global illumination (RTGI)
-* Restir lighting
+* ReSTIR lighting
 * Ray-traced transmission
+* Volumetric clouds
+* Temporal Upscaling
+* Software based VRS
+* Deferred texturing
+* Virtualized geometry
 
 ## Screenshots
 
@@ -104,17 +118,13 @@
 * CMake 4.2 or newer
 * Visual Studio 2026
 
-## **Build Steps**
+## Build Steps
 
-1. git clone https://github.com/Jwill724/VK_Mark-3.git
-
-2. cd VK_Mark-3
-
-3. cmake -S . -B build -G "Visual Studio 18 2026" -A x64
-
-4. cmake --build build --config Release
-
-5. Open `build/VulkanRenderer.sln` in Visual Studio 2026.
+```bash
+git clone https://github.com/Jwill724/VK_Mark-3.git
+cd VK_Mark-3
+cmake -S . -B build -G "Visual Studio 18 2026" -A x64
+cmake --build build --config Release
 
 ### Assets
 

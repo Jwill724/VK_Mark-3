@@ -32,10 +32,9 @@ const uint VIS_FLASHLIGHT            = 1u << 3;
 const uint VIS_CSM0                  = 1u << 4;
 const uint VIS_CSM1                  = 1u << 5;
 const uint VIS_CSM2                  = 1u << 6;
-const uint VIS_CSM3                  = 1u << 7;
-const uint VIS_VOLUMETRIC            = 1u << 8;
+const uint VIS_VOLUMETRIC            = 1u << 7;
 
-const uint VISIBILITY_TYPE_COUNT = 9u;
+const uint VISIBILITY_TYPE_COUNT = 8u;
 
 const uint LOD_IDX_LOD0    = 0u;
 const uint LOD_IDX_LOD1    = 1u;
@@ -137,7 +136,6 @@ uint selectShadowLODIndex(InstanceInput instance, uint cascadeIndex)
 	// C0 -> shadow0
 	// C1 -> shadow0
 	// C2 -> shadow1
-	// C3 -> shadow2
 	switch (cascadeIndex)
 	{
 		case 0u:
@@ -248,9 +246,6 @@ uint resolveLODIndexForStream(
 
 		case VIS_SLOT_CSM2:
 			return selectShadowLODIndex(instance, 2u);
-
-		case VIS_SLOT_CSM3:
-			return selectShadowLODIndex(instance, 3u);
 
 		case VIS_SLOT_VOLUMETRIC:
 			return selectVolumetricShadowLODIndex(instance);

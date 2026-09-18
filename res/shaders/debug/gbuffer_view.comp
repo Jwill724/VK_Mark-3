@@ -1,4 +1,4 @@
-#version 450
+#version 460
 
 #extension GL_GOOGLE_include_directive : require
 
@@ -14,10 +14,9 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = PUSH_SET, binding = PUSH_BINDING_READ_1) uniform usampler2D visBuffer;
 layout(set = PUSH_SET, binding = PUSH_BINDING_READ_2) uniform sampler2D  gbAlbedoRough;
 layout(set = PUSH_SET, binding = PUSH_BINDING_READ_3) uniform usampler2D gbNormalMaterial;
-layout(set = PUSH_SET, binding = PUSH_BINDING_READ_4) uniform sampler2D  gbEmissive;
-layout(set = PUSH_SET, binding = PUSH_BINDING_READ_5) uniform sampler2D  depthTex;
-layout(set = PUSH_SET, binding = PUSH_BINDING_READ_6) uniform sampler2D  aoFinal;
-layout(set = PUSH_SET, binding = PUSH_BINDING_READ_7) uniform sampler2D  contactShadowMask;
+layout(set = PUSH_SET, binding = PUSH_BINDING_READ_4) uniform sampler2D  depthTex;
+layout(set = PUSH_SET, binding = PUSH_BINDING_READ_5) uniform sampler2D  aoFinal;
+layout(set = PUSH_SET, binding = PUSH_BINDING_READ_6) uniform sampler2D  contactShadowMask;
 
 layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1, rgba16f) writeonly uniform image2D outColor;
 
@@ -61,10 +60,6 @@ void main()
 
 			case DBG_METALLIC:
 				result = vec3(unpackGBufferMetal(texelFetch(gbNormalMaterial, px, 0).r));
-				break;
-
-			case DBG_EMISSIVE:
-				result = texelFetch(gbEmissive, px, 0).rgb;
 				break;
 
 			case DBG_SSAO:

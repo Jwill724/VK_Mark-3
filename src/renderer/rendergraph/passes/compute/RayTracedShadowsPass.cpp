@@ -37,11 +37,11 @@ void RegisterRTShadowsPass(RenderGraph& graph)
 
 				.ReadResource(RD::Renderer_RenderTarget::DepthResolved, RD::ImageAccess::DepthRead)
 				.ReadResource(RD::Renderer_RenderTarget::PrevDepthResolved, RD::ImageAccess::DepthRead)
-				.ReadResource(RD::Renderer_RenderTarget::GBufferAlbedoRough, RD::ImageAccess::ComputeRead)
-				.ReadResource(RD::Renderer_RenderTarget::GBufferNormalMaterial, RD::ImageAccess::ComputeRead)
-				.ReadResource(RD::Renderer_RenderTarget::ViewNormals, RD::ImageAccess::ComputeRead)
-				.ReadResource(RD::Renderer_RenderTarget::Velocity, RD::ImageAccess::ComputeRead)
-				.ReadResource(RD::Renderer_RenderTarget::RTShadowDenoised, RD::ImageAccess::ComputeRead)
+				.ReadResource(RD::Renderer_RenderTarget::GBufferAlbedoRough, RD::ImageAccess::Read)
+				.ReadResource(RD::Renderer_RenderTarget::GBufferNormalMaterial, RD::ImageAccess::Read)
+				.ReadResource(RD::Renderer_RenderTarget::ViewNormals, RD::ImageAccess::Read)
+				.ReadResource(RD::Renderer_RenderTarget::Velocity, RD::ImageAccess::Read)
+				.ReadResource(RD::Renderer_RenderTarget::RTShadowDenoised, RD::ImageAccess::Read)
 
 				.InternalResource(RD::Renderer_RenderTarget::ShadowInvalidMask, RD::ImageAccess::ComputeWrite, RD::ImageAccess::ComputeRead)
 

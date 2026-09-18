@@ -1,0 +1,94 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "../include/world_probe_surface.glsl"
+#include "../include/world_probe_packing.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1, rgba16f) uniform writeonly image2D outProbeReconstructed;
+
+layout(push_constant) uniform WorldProbeReconstructPush
+{
+	uint directFallback;
+	uint debugView;
+	uint pad0;
+	uint pad1;
+} pc;
+
+bool wpReconstructSurface(ivec2 pixel, ivec2 fullExtent,
+	float centerZ, vec3 centerNormalVS, out vec4 sky, out vec4 bounce)
+{
+	SceneData scene = getSceneData();
+	ivec2 lowExtent = SampleTextureSize(
+		scene.renderTargetIDs.worldProbeLightingID, 0) / ivec2(1, 2);
+	vec2 uv = (vec2(pixel) + 0.5) / vec2(fullExtent);
+	vec2 grid = uv * vec2(lowExtent) - 0.5;
+	ivec2 base = ivec2(floor(grid));
+	vec2 f = fract(grid);
+	float depthTolerance = max(abs(centerZ) * 0.02, 0.02);
+	sky = vec4(0);
+	bounce = vec4(0);
+	float weightSum = 0.0;
+	for (int i = 0; i < 4; ++i)
+	{
+		ivec2 offset = ivec2(i & 1, i >> 1);
+		ivec2 hp = clamp(base + offset, ivec2(0), lowExtent - 1);
+		ivec2 fp = wpResolveSourcePixel(hp, lowExtent, fullExtent);
+		float raw = SampleTextureFetch(scene.renderTargetIDs.depthResolvedID, fp, 0).r;
+		if (raw <= 0.0) continue;
+		float z = screenToViewDepth(raw, scene.depthLinearizeMult, scene.depthLinearizeAdd);
+		float depthError = abs(z - centerZ) / depthTolerance;
+		if (depthError >= 1.0) continue;
+		vec3 normalVS = normalize(octDecode(SampleTextureFetch(
+			scene.renderTargetIDs.viewNormalsID, fp, 0).rg * 2.0 - 1.0));
+		float cosine = dot(normalVS, centerNormalVS);
+		if (cosine <= 0.9) continue;
+		vec2 bilinear = mix(1.0 - f, f, vec2(offset));
+		float nw = clamp((cosine - 0.9) * 10.0, 0.0, 1.0);
+		float w = bilinear.x * bilinear.y * (1.0 - depthError) * nw * nw;
+		sky += SampleTextureFetch(scene.renderTargetIDs.worldProbeLightingID, hp, 0) * w;
+		bounce += SampleTextureFetch(scene.renderTargetIDs.worldProbeLightingID,
+			hp + ivec2(0, lowExtent.y), 0) * w;
+		weightSum += w;
+	}
+	if (weightSum <= 1e-6) return false;
+	sky /= weightSum;
+	bounce /= weightSum;
+	return true; // Zero coverage is compatible; do not fill it with a different surface.
+}
+
+void main()
+{
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 fullExtent = imageSize(outProbeReconstructed) / ivec2(1, 2);
+	if (any(greaterThanEqual(pixel, fullExtent))) return;
+	SceneData scene = getSceneData();
+	float raw = SampleTextureFetch(scene.renderTargetIDs.depthResolvedID, pixel, 0).r;
+	vec4 sky = vec4(0), bounce = vec4(0);
+	if (raw > 0.0)
+	{
+		vec3 normalVS = normalize(octDecode(SampleTextureFetch(
+			scene.renderTargetIDs.viewNormalsID, pixel, 0).rg * 2.0 - 1.0));
+		float z = screenToViewDepth(raw, scene.depthLinearizeMult, scene.depthLinearizeAdd);
+		bool compatible = wpReconstructSurface(pixel, fullExtent, z, normalVS, sky, bounce);
+		if (!compatible)
+		{
+			// Discard tiny unnormalized sums from failed reconstruction.
+			sky = vec4(0);
+			bounce = vec4(0);
+			if (pc.directFallback != 0u)
+			{
+				vec3 geometricNormalWS = normalize(mat3(scene.invView) * normalVS);
+				wpPackLighting(wpEvaluateSurface(pixel, fullExtent, raw, geometricNormalWS), sky, bounce);
+			}
+		}
+		if (pc.debugView != 0u)
+		{
+			sky = vec4(!compatible ? vec3(1, 0, 0)
+				: bounce.a > 1e-6 ? vec3(0, 1, 0) : vec3(0, 0, 1), 1);
+			bounce = vec4(0, 0, 0, 1);
+		}
+	}
+	imageStore(outProbeReconstructed, pixel, sky);
+	imageStore(outProbeReconstructed, pixel + ivec2(0, fullExtent.y), bounce);
+}

@@ -57,6 +57,8 @@ struct EnvironmentSet
 	uint32_t       setIndex = UINT32_MAX; // Maps to sh irradiance too
 	std::vector<SpecularPrefilterPush> specularPCs{};
 
+	float skyScale = 1.0f;
+
 	bool IsValid() const noexcept { return setIndex != UINT32_MAX; }
 	void Reset()   { *this = EnvironmentSet{}; }
 };

@@ -5,7 +5,6 @@
 
 class Scene;
 class FrameContext;
-class Allocator;
 class Profiler;
 class BindlessImageTable;
 struct ModelAsset;
@@ -71,8 +70,8 @@ namespace World
 		const Extents2D& renderExtent,
 		const Extents2D& displayExtent,
 		FrameContext& frameCtx,
-		Allocator& allocator,
 		Profiler& profiler,
 		GLFWwindow* window,
+		const float adaptedEV100,
 		bool isTemporalAllowed);
 }

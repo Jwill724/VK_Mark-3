@@ -24,6 +24,12 @@ void RegisterRTShadowsPass(RenderGraph& graph);
 
 void RegisterNRDDenoisePass(RenderGraph& graph);
 
+void RegisterWorldProbesUpdatePass(RenderGraph& graph);
+void RegisterWorldProbesResolvePass(RenderGraph& graph);
+void RegisterWorldProbesReconstructPass(RenderGraph& graph);
+void RegisterWorldProbesCachePass(RenderGraph& graph);
+void RegisterWorldProbesDebugPass(RenderGraph& graph);
+
 void RegisterInstanceCullPass(RenderGraph& graph);
 
 void RegisterDrawBuildPass(RenderGraph& graph);
@@ -52,7 +58,7 @@ void RegisterHiZGenerationLatePass(RenderGraph& graph);
 
 void RegisterClusteredLightsPass(RenderGraph& graph);
 
-//void RegisterVolumetricFogPass(RenderGraph& graph);
+void RegisterVolumetricFogPass(RenderGraph& graph);
 
 void RegisterVolumetricShadowMapPass(RenderGraph& graph);
 
@@ -78,7 +84,13 @@ void RegisterSSGIPass(RenderGraph& graph);
 
 void RegisterContactShadowsPass(RenderGraph& graph);
 
-void RegisterVolumetricLightPass(RenderGraph& graph);
+void RegisterAtmosphereSkyRenderPass(RenderGraph& graph);
+
+void RegisterAtmosphereSkyViewPass(RenderGraph& graph);
+
+void RegisterAtmosphereLUTUpdatePass(RenderGraph& graph);
+
+void RegisterAtmosphereLightingPass(RenderGraph& graph);
 
 void RegisterHDRSceneCompositePass(RenderGraph& graph);
 

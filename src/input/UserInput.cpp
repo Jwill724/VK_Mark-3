@@ -23,6 +23,9 @@ namespace UserInput
 	static bool firstMouse = true;
 	static bool bWindowResizedThisFrame = true;
 
+	static bool bKeyboardCaptured = false;
+	static bool bMouseCaptured = false;
+
 	Extents2D cachedWindowExtent;
 
 	void UpdateCachedWindowExtent(uint32_t w, uint32_t h)
@@ -68,11 +71,13 @@ void UserInput::MouseState::Update(GLFWwindow* window)
 	// iconified the framebuffer is 0x0.
 	const bool bSuppressMotion =
 		bWindowResizedThisFrame ||
+		bMouseCaptured ||
 		glfwGetWindowAttrib(window, GLFW_ICONIFIED) != 0;
 
 	// Button state is read unconditionally so the cursor hide/show state
 	// machine below can never get stuck hidden across a resize.
-	rightPressed = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+	rightPressed = !bMouseCaptured &&
+		glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
 
 	if (bSuppressMotion)
 	{
@@ -134,18 +139,25 @@ int UserInput::KeyboardState::ToGlfw(Keys key)
 
 void UserInput::KeyboardState::update(GLFWwindow* window)
 {
-	// Close window on Escape
-	if (isPressed(Keys::ESC))
+	const bool bCaptured = bKeyboardCaptured;
+
+	if (!bCaptured && isPressed(Keys::ESC))
 		glfwSetWindowShouldClose(window, true);
 
 	for (auto key : trackedKeys)
 	{
-		int glfwKey = ToGlfw(key);
-		int state   = glfwGetKey(window, glfwKey);
-		bool isDown = (state == GLFW_PRESS || state == GLFW_REPEAT);
+		const int glfwKey = ToGlfw(key);
+
+		bool isDown = false;
+
+		if (!bCaptured)
+		{
+			const int state = glfwGetKey(window, glfwKey);
+			isDown = (state == GLFW_PRESS || state == GLFW_REPEAT);
+		}
 
 		KeyState& prevState = keyStates[glfwKey];
-		KeyState  newState  = KeyState::None;
+		KeyState  newState = KeyState::None;
 
 		switch (prevState) {
 		case KeyState::None:
@@ -188,6 +200,14 @@ bool UserInput::KeyboardState::isReleased(Keys key) const
 
 void UserInput::updateLocalInput(GLFWwindow* window)
 {
+	const ImGuiIO& io = ImGui::GetIO();
+
+	bKeyboardCaptured = io.WantCaptureKeyboard;
+
+	// An in-progress look drag keeps the mouse even when the recentred
+	// cursor lands under a window.
+	bMouseCaptured = io.WantCaptureMouse && !mouse.rightHideCursor;
+
 	mouse.Update(window);
 	keyboard.update(window);
 

@@ -1,0 +1,225 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "../include/world_probe.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(push_constant, scalar) uniform WPPush
+{
+	uvec4 update;
+} pc;
+
+bool wpInsideOwningCell(
+	vec3 candidate,
+	vec3 home,
+	float spacing,
+	float margin)
+{
+	return all(
+		lessThanEqual(
+			abs(candidate - home),
+			vec3((0.5 - margin) * spacing)));
+}
+
+void main()
+{
+	uint id;
+
+	if (!wpScheduledProbe(pc.update.x, gl_WorkGroupID.x, id)) return;
+	if (gl_LocalInvocationIndex != 0u) return;
+
+	WorldProbeBuffer b = getWorldProbeBuffer();
+
+	WPHeader h = b.header;
+
+	WPTraceSummary summary =
+		getWorldProbeSummaryBuffer().summaries[id];
+
+	if (summary.counts.w == 0u || summary.counts.z == 0u) return;
+
+	getWorldProbeSummaryBuffer().summaries[id].counts.w = 0u;
+
+	float spacing =
+		h.cascades[id / WP_PER_CASCADE].originSpacing.w;
+
+	vec3 p = b.probes[id].position.xyz;
+	vec3 home = vec3(b.probes[id].cell.xyz) * spacing;
+
+	float clearance = h.relocation0.x;
+	float epsilon = h.relocation1.y;
+	float margin = h.relocation1.x;
+
+	bool inside =
+		float(summary.counts.y) / float(summary.counts.z) >=
+		h.relocation0.y;
+
+	bool front = summary.counts.x != 0u;
+	bool back = summary.counts.y != 0u;
+
+	vec3 nearDir = wpRayDirection(summary.direction.x);
+	vec3 farDir = wpRayDirection(summary.direction.y);
+	vec3 backDir = wpRayDirection(summary.direction.z);
+
+	vec3 nearPoint = p + nearDir * summary.distance.x;
+	vec3 farPoint = p + farDir * summary.distance.y;
+	vec3 backPoint = p + backDir * summary.distance.z;
+
+	vec3 candidate = p;
+
+	if (h.relocation0.w == 0.0)
+	{
+		candidate = home;
+	}
+	else if (inside)
+	{
+		if (back)
+		{
+			candidate =
+				p +
+				backDir * (summary.distance.z + clearance);
+		}
+	}
+	else if (front && summary.distance.x < clearance)
+	{
+		float required =
+			clearance - summary.distance.x;
+
+		vec3 away =
+			p - nearDir * required;
+
+		float towardStep =
+			min(
+				required,
+				max(summary.distance.y - clearance, 0.0));
+
+		vec3 toward =
+			p + farDir * towardStep;
+
+		bool awayValid =
+			wpInsideOwningCell(
+				away,
+				home,
+				spacing,
+				margin) &&
+			length(away - farPoint) >= clearance;
+
+		bool towardValid =
+			wpInsideOwningCell(
+				toward,
+				home,
+				spacing,
+				margin) &&
+			length(toward - nearPoint) >= summary.distance.x &&
+			length(toward - farPoint) >= clearance;
+
+		if (awayValid)
+		{
+			candidate = away;
+		}
+		else if (towardValid)
+		{
+			candidate = toward;
+		}
+	}
+	else
+	{
+		vec3 toHome = home - p;
+		float len = length(toHome);
+
+		float stepDistance =
+			min(
+				len,
+				h.relocation0.z * spacing);
+
+		vec3 next =
+			p +
+			toHome / max(len, 1e-8) *
+			stepDistance;
+
+		if (len <= epsilon)
+		{
+			next = home;
+		}
+
+		bool safe =
+			(!front || length(next - nearPoint) >= clearance) &&
+			(!back || length(next - backPoint) >= clearance);
+
+		if (safe)
+		{
+			candidate = next;
+		}
+	}
+
+	bool accepted =
+		wpInsideOwningCell(
+			candidate,
+			home,
+			spacing,
+			margin);
+
+	bool snapHome =
+		length(home - p) > 0.0 &&
+		length(home - p) <= epsilon &&
+		all(equal(candidate, home));
+
+	bool moved =
+		accepted &&
+		(length(candidate - p) > epsilon || snapHome);
+
+	int flags =
+		b.probes[id].cell.w &
+		~(
+			WP_FLAG_MOVED |
+			WP_FLAG_INSIDE |
+			WP_FLAG_RELOCATED);
+
+	if (moved)
+	{
+		b.probes[id].position = vec4(candidate, 0.0);
+		b.probes[id].state.x = 0u;
+		b.probes[id].rayClassMask = uvec4(0u);
+		b.probes[id].meta.z = 0u;
+		b.probes[id].meta.w = 0u;
+
+		flags =
+			(flags & ~WP_FLAG_QUARTER_TRACE) |
+			WP_FLAG_MOVED |
+			WP_FLAG_NEEDS_FULL_TRACE;
+
+		for (uint a = 0u; a < 6u; ++a)
+		{
+			b.probes[id].sky[a] = vec4(0);
+			b.probes[id].bounce[a] = vec4(0);
+		}
+
+		if (length(candidate - home) > epsilon)
+		{
+			flags |= WP_FLAG_RELOCATED;
+		}
+	}
+	else
+	{
+		b.probes[id].meta.z =
+			min(
+				b.probes[id].meta.z + 1u,
+				0xfffffffeu);
+
+		if (length(p - home) > epsilon)
+		{
+			flags |= WP_FLAG_RELOCATED;
+		}
+
+		if (inside)
+		{
+			b.probes[id].state.x = 0u;
+
+			flags |=
+				WP_FLAG_INSIDE |
+				WP_FLAG_NEEDS_FULL_TRACE;
+		}
+	}
+
+	b.probes[id].cell.w = flags;
+}

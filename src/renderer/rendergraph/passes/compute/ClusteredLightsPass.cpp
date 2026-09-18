@@ -23,7 +23,7 @@ void RegisterClusteredLightsPass(RenderGraph& graph)
 		[&](RenderPassBuilder& builder)
 		{
 			builder
-				.SetPhase(RenderPhase::AsyncWindow)
+				.SetPhase(RenderPhase::Prepass)
 
 				.SetExecutionCondition(
 					[](const RenderPassExecutionContext& ctx)
@@ -45,9 +45,7 @@ void RegisterClusteredLightsPass(RenderGraph& graph)
 							*ctx.frameCtx,
 							ctx.commandBuffer,
 							RD::Renderer_Pass::ClusteredLights,
-							pass.passName,
-							ctx.threadSlot,
-							ctx.scheduleInfo->queue);
+							pass.passName);
 
 						pass.scope = ComputeScope{{ ctx.frameState->GetLightCount(), 1u }, { WORKGROUP_256 }};
 						auto& pso = std::get<ComputeScope>(pass.scope);
@@ -61,6 +59,8 @@ void RegisterClusteredLightsPass(RenderGraph& graph)
 						const auto& clusterCursors      = frameCtx->GetGPUBuffer(RD::Renderer_Buffer::ClusterCursors);
 						const auto& clusterScanScratch  = frameCtx->GetGPUBuffer(RD::Renderer_Buffer::ClusterScanScratch);
 						const auto& clusterOffsets      = frameCtx->GetGPUBuffer(RD::Renderer_Buffer::ClusterOffsets);
+						const auto& volClusterCounts    = frameCtx->GetGPUBuffer(RD::Renderer_Buffer::VolClusterCounts);
+						const auto& volClusterCursors   = frameCtx->GetGPUBuffer(RD::Renderer_Buffer::VolClusterCursors);
 
 						const auto& lightCountBuf            = frameCtx->GetGPUBuffer(RD::Renderer_Buffer::VisibleLightCount);
 						const auto& visibleLightIdsBuf       = frameCtx->GetGPUBuffer(RD::Renderer_Buffer::VisibleLightIDs);
@@ -72,6 +72,8 @@ void RegisterClusteredLightsPass(RenderGraph& graph)
 						// Buffers reset to zero
 						pso.FillGpuBuffer(cmd, clusterCursors);
 						pso.FillGpuBuffer(cmd, clusterCounts);
+						pso.FillGpuBuffer(cmd, volClusterCounts);
+						pso.FillGpuBuffer(cmd, volClusterCursors);
 						pso.FillGpuBuffer(cmd, clusterScanScratch);
 						pso.FillGpuBuffer(cmd, transparentClusterBounds, RD::MAX_FLT_UINT);
 

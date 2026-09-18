@@ -107,7 +107,7 @@ public:
 	bool IsStaticTransformsDirty()          const noexcept { return m_staticDirty.count > 0u; }
 	void ClearStaticTransformsDirty()             noexcept { m_staticDirty = {}; }
 
-	void BuildMotionMatrices(bool bMotionNeeded, bool bTemporalValid);
+	void BuildMotionMatrices(bool bTemporalValid);
 
 	bool VerifyTransformCount()
 	{

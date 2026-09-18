@@ -1,0 +1,28 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "../include/world_probe.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1, rgba32f) uniform writeonly image2D outProbeSkyMean;
+
+// 128 x 80 texels, one texel for each of 10,240 probes. FP32/unexposed
+// preserves the original six-lobe average without FP16 range restrictions.
+// Refresh after all probe mutations, including relocation, each frame.
+void main()
+{
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 extent = imageSize(outProbeSkyMean);
+	if (any(greaterThanEqual(pixel, extent))) return;
+	uint id = uint(pixel.x + extent.x * pixel.y);
+	WorldProbeBuffer b = getWorldProbeBuffer();
+	vec4 mean = vec4(0);
+	if (id < min(b.header.layoutInfo.y, WP_COUNT)
+		&& b.probes[id].state.x != 0u
+		&& b.probes[id].state.y == b.header.revisions.y)
+	{
+		for (uint a = 0u; a < 6u; ++a) mean += b.probes[id].sky[a];
+		mean *= 1.0 / 6.0;
+	}
+	imageStore(outProbeSkyMean, pixel, mean);
+}

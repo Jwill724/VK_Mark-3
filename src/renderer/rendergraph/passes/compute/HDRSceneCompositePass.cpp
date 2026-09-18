@@ -1,10 +1,11 @@
 #include "pch.h"
 
 #include "../../RenderPasses.h"
-#include "../../../rendergraph/RenderGraphBuilder.h"
+#include "../../RenderGraphBuilder.h"
 #include "../../scopes/ComputeScope.h"
 #include "../../RenderGraph.h"
 #include "../../RenderGraphResources.h"
+#include "../../../scene/AtmosphereTypes.h"
 #include "../../../backend/memory/BindlessImageTable.h"
 #include "../../../../profiler/Profiler.h"
 
@@ -21,8 +22,16 @@ void RegisterHDRSceneCompositePass(RenderGraph& graph)
 				.SetExecutionCondition(
 					[](const RenderPassExecutionContext& ctx)
 					{
-						return ctx.frameState->InstancesActive();
+						return !ctx.frameState->DebugRenderFastPath();
 					})
+
+				.RequireResource(
+					RD::Renderer_RenderTarget::AtmosphereTransmittance,
+					RD::ImageAccess::Read)
+
+				.RequireResource(
+					RD::Renderer_RenderTarget::AtmosphereLighting,
+					RD::ImageAccess::Read)
 
 				.ReadResource(
 					RD::Renderer_RenderTarget::TransparentAccumulation,
@@ -32,49 +41,44 @@ void RegisterHDRSceneCompositePass(RenderGraph& graph)
 					RD::Renderer_RenderTarget::TransparentRevealage,
 					RD::ImageAccess::ComputeRead)
 
+				.ReadResource(
+					RD::Renderer_RenderTarget::AtmosphereHDR,
+					RD::ImageAccess::ComputeRead)
+
+				.ReadResource(
+					RD::Renderer_RenderTarget::DepthResolved,
+					RD::ImageAccess::DepthRead)
+
 				.WriteResource(
 					RD::Renderer_RenderTarget::HDRScene,
 					RD::ImageAccess::ComputeWrite,
-					RD::ImageAccess::ComputeRead)
+					RD::ImageAccess::Read)
 
 				.SetRecord(
 					[&graph](RenderPassExecutionContext& ctx, RenderPassDesc& pass)
 					{
 						auto passScope = ctx.profiler->ProfilePass(
-							*ctx.frameCtx,
-							ctx.commandBuffer,
-							RD::Renderer_Pass::HDRSceneComposite,
-							pass.passName);
+							*ctx.frameCtx, ctx.commandBuffer,
+							RD::Renderer_Pass::HDRSceneComposite, pass.passName);
 
-						const auto& drawExtent = graph.GetRenderExtent();
-						pass.scope = ComputeScope{{ drawExtent }};
+						pass.scope = ComputeScope{ { graph.GetRenderExtent() } };
 						auto& pso = std::get<ComputeScope>(pass.scope);
 
-						const auto& transparentAccum = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::TransparentAccumulation);
-						const auto& transparentReveal = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::TransparentRevealage);
-						const auto& hdrScene = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::HDRScene);
-						const auto nearestClampSampler = ctx.imageTable->GetSampler(RD::Renderer_Sampler::NearestClamp);
+						const auto nearest = ctx.imageTable->GetSampler(RD::Renderer_Sampler::NearestClamp);
+						pso.BindReadImage(pass.pushWriter, RD::PUSH_BINDING_READ_1,
+							ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::TransparentAccumulation), nearest);
+						pso.BindReadImage(pass.pushWriter, RD::PUSH_BINDING_READ_2,
+							ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::TransparentRevealage), nearest);
+						pso.BindReadImage(pass.pushWriter, RD::PUSH_BINDING_READ_3,
+							ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::AtmosphereHDR), nearest);
+						pso.BindReadImage(pass.pushWriter, RD::PUSH_BINDING_READ_4,
+							ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::DepthResolved), nearest,
+							UINT32_MAX, RD::ImageAccess::DepthRead);
+						pso.BindWriteImage(pass.pushWriter, RD::PUSH_BINDING_WRITE_1,
+							ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::HDRScene));
 
-						pso.BindReadImage(
-							pass.pushWriter,
-							RD::PUSH_BINDING_READ_1,
-							transparentAccum,
-							nearestClampSampler);
-						pso.BindReadImage(
-							pass.pushWriter,
-							RD::PUSH_BINDING_READ_2,
-							transparentReveal,
-							nearestClampSampler);
-
-						pso.BindWriteImage(
-							pass.pushWriter,
-							RD::PUSH_BINDING_WRITE_1,
-							hdrScene);
-
-						pso.DispatchComputePass(
-							ctx.commandBuffer,
-							ctx.Pipe(RP::HDRSceneComposite),
-							pass.pushWriter);
+						pso.DispatchComputePass(ctx.commandBuffer,
+							ctx.Pipe(RP::HDRSceneComposite), pass.pushWriter);
 					});
 		});
 }

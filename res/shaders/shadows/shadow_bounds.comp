@@ -1,4 +1,4 @@
-#version 450
+#version 460
 
 #extension GL_GOOGLE_include_directive : require
 #extension GL_ARB_separate_shader_objects : require
@@ -58,7 +58,6 @@ void main()
 		barrier();
 	}
 
-	// per-cascade receiver volumes (thread 0..3, one cascade each)
 	if (tid >= MAX_CASCADES) return;
 
 	float nearPlane = sceneData.cameraClips.x;

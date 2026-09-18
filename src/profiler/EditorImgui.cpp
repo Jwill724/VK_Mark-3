@@ -1,6 +1,7 @@
 #include "pch.h"
 
 #include "EditorImgui.h"
+#include <algorithm>
 
 #include "input/Camera.h"
 #include "renderer/scene/World.h"
@@ -9,14 +10,12 @@
 #include "renderer/backend/Device.h"
 #include "renderer/backend/Swapchain.h"
 #include "renderer/backend/Queue.h"
-
+#include "ShaderEditorPanel.h"
 #include "../core/Environment.h"
-
 #include "renderer/scene/LightingSystem.h"
+#include "renderer/scene/WorldProbeTypes.h"
 
-#include "renderer/RendererDefinitions.h"
-
-namespace RD = RendererDefinitions;
+ImFont* Editor::s_monoFont = nullptr;
 
 static void MyWindowFocusCallback(GLFWwindow* window, int focused)
 {
@@ -32,17 +31,17 @@ namespace
 	{
 		static const float CATEGORY_LIST_WIDTH = 130.0f;
 		static const float METRIC_LABEL_WEIGHT = 0.58f;
-		static const float WINDOW_PADDING      = 10.0f;
+		static const float WINDOW_PADDING = 10.0f;
 
-		static const ImVec4 ACCENT     = ImVec4(0.40f, 0.80f, 1.00f, 1.00f);
-		static const ImVec4 GOOD       = ImVec4(0.45f, 0.85f, 0.45f, 1.00f);
-		static const ImVec4 WARN       = ImVec4(1.00f, 0.75f, 0.30f, 1.00f);
-		static const ImVec4 BAD        = ImVec4(1.00f, 0.40f, 0.40f, 1.00f);
-		static const ImVec4 MUTED      = ImVec4(0.60f, 0.60f, 0.60f, 1.00f);
+		static const ImVec4 ACCENT = ImVec4(0.40f, 0.80f, 1.00f, 1.00f);
+		static const ImVec4 GOOD = ImVec4(0.45f, 0.85f, 0.45f, 1.00f);
+		static const ImVec4 WARN = ImVec4(1.00f, 0.75f, 0.30f, 1.00f);
+		static const ImVec4 BAD = ImVec4(1.00f, 0.40f, 0.40f, 1.00f);
+		static const ImVec4 MUTED = ImVec4(0.60f, 0.60f, 0.60f, 1.00f);
 
-		static const ImVec4 ROW_ASYNC  = ImVec4(0.10f, 0.24f, 0.34f, 0.55f);
-		static const ImVec4 BAR_GFX    = ImVec4(0.30f, 0.48f, 0.70f, 0.90f);
-		static const ImVec4 BAR_ASYNC  = ImVec4(0.20f, 0.60f, 0.80f, 0.90f);
+		static const ImVec4 ROW_ASYNC = ImVec4(0.10f, 0.24f, 0.34f, 0.55f);
+		static const ImVec4 BAR_GFX = ImVec4(0.30f, 0.48f, 0.70f, 0.90f);
+		static const ImVec4 BAR_ASYNC = ImVec4(0.20f, 0.60f, 0.80f, 0.90f);
 	}
 
 	// =========================================================================
@@ -347,6 +346,7 @@ namespace
 		Profiler* profiler = nullptr;
 		FrameStats* stats = nullptr;
 		RD::RenderToggles* dbg = nullptr;
+		Renderer* renderer = nullptr;
 	};
 
 	using DrawFn = void(*)(UIContext& ui);
@@ -553,46 +553,198 @@ namespace
 
 	static void groupSun(UIContext& ui)
 	{
-		(void)ui;
-
 		auto& scene = World::GetScene().GetSceneData();
+		auto& sky = ui.profiler->atmosphereSkySettings;
 
-		static glm::vec3 sunCol = glm::vec3(scene.sunlightColor);
-		static float sunI = scene.sunlightColor.w;
-		static glm::vec3 sunDir = glm::vec3(scene.sunlightDirection);
+		UI::separatorText("Direction");
 
-		ImGui::SliderFloat3("Sun Dir##light", glm::value_ptr(sunDir), -0.5f, 0.5f);
-		ImGui::SliderFloat3("Sun Color##light", glm::value_ptr(sunCol), 0.0f, 1.0f);
+		glm::vec3 direction = glm::vec3(scene.sunlightDirection);
+		float lengthSq = glm::dot(direction, direction);
 
-		int sunInt = static_cast<float>(sunI);
-		ImGui::SliderInt("Sun Intensity##light", &sunInt, 0, 100);
-		sunI = static_cast<float>(sunInt);
+		if (!std::isfinite(lengthSq) || lengthSq < 1e-12f)
+			direction = glm::vec3(0.0f, 1.0f, 0.0f);
+		else
+			direction /= std::sqrt(lengthSq);
 
-		scene.sunlightColor = glm::vec4(sunCol, sunI);
-		scene.sunlightDirection = glm::vec4(sunDir, 0.0f);
-	}
+		// Retain azimuth at the poles, where the direction does not define it.
+		static float azimuthDeg = 0.0f;
 
-	static void groupEnvironment(UIContext& ui)
-	{
-		RD::RenderToggles& dbg = *ui.dbg;
+		float horizontalSq =
+			direction.x * direction.x + direction.z * direction.z;
 
-		static int selectedEnv = 0;
+		if (horizontalSq > 1e-10f)
+		{
+			azimuthDeg = glm::degrees(
+				std::atan2(direction.z, direction.x));
 
-		if (ImGui::BeginCombo("Active##env", fmt::format("Image {}", selectedEnv + 1).c_str())) {
-			for (uint32_t i = 0; i < Environment::_HDRPathCount; ++i) {
-				const bool isSelected = (selectedEnv == static_cast<int>(i));
-				const std::string label = fmt::format("Image {}", i + 1);
+			if (azimuthDeg < 0.0f)
+				azimuthDeg += 360.0f;
+		}
 
-				if (ImGui::Selectable(label.c_str(), isSelected)) {
-					selectedEnv = static_cast<int>(i);
-					dbg.activeEnvMap = i;
-				}
+		float elevationDeg = glm::degrees(
+			std::asin(glm::clamp(direction.y, -1.0f, 1.0f)));
 
-				if (isSelected) {
-					ImGui::SetItemDefaultFocus();
+		bool directionChanged = false;
+
+		directionChanged |= ImGui::SliderFloat(
+			"Azimuth##sun",
+			&azimuthDeg,
+			0.0f, 360.0f,
+			"%.2f deg",
+			ImGuiSliderFlags_AlwaysClamp);
+
+		ImGui::SetItemTooltip(
+			"Full rotation around the world Y axis. "
+			"0 = +X, 90 = +Z, 180 = -X, 270 = -Z. "
+			"Ctrl-click to enter an exact angle.");
+
+		directionChanged |= ImGui::SliderFloat(
+			"Elevation##sun",
+			&elevationDeg,
+			-90.0f, 90.0f,
+			"%.2f deg",
+			ImGuiSliderFlags_AlwaysClamp);
+
+		ImGui::SetItemTooltip(
+			"0 is the world-horizontal plane. "
+			"Positive angles place the sun overhead; negative angles place it below.");
+
+		if (directionChanged)
+		{
+			float azimuth = glm::radians(azimuthDeg);
+			float elevation = glm::radians(elevationDeg);
+			float horizontal = std::cos(elevation);
+
+			direction = glm::vec3(
+				horizontal * std::cos(azimuth),
+				std::sin(elevation),
+				horizontal * std::sin(azimuth));
+
+			scene.sunlightDirection = glm::vec4(direction, 0.0f);
+		}
+
+		if (ImGui::TreeNode("Direction Vector##sun"))
+		{
+			glm::vec3 editedDirection = glm::vec3(scene.sunlightDirection);
+
+			if (ImGui::InputFloat3(
+				"XYZ##sun",
+				glm::value_ptr(editedDirection),
+				"%.6f"))
+			{
+				float editedLengthSq = glm::dot(
+					editedDirection, editedDirection);
+
+				if (std::isfinite(editedLengthSq) && editedLengthSq > 1e-12f)
+				{
+					editedDirection /= std::sqrt(editedLengthSq);
+					scene.sunlightDirection = glm::vec4(editedDirection, 0.0f);
 				}
 			}
-			ImGui::EndCombo();
+
+			ImGui::SetItemTooltip(
+				"World-space direction toward the sun. "
+				"Nonzero vectors are normalized when edited.");
+
+			ImGui::TreePop();
+		}
+
+		UI::separatorText("Color & Intensity");
+
+		glm::vec3 tint = glm::vec3(scene.sunlightColor);
+
+		const ImGuiColorEditFlags colorFlags =
+			ImGuiColorEditFlags_HDR |
+			ImGuiColorEditFlags_Float |
+			ImGuiColorEditFlags_DisplayRGB |
+			ImGuiColorEditFlags_InputRGB;
+
+		bool tintChanged = ImGui::ColorEdit3(
+			"Tint##sun",
+			glm::value_ptr(tint),
+			colorFlags);
+
+		ImGui::SetItemTooltip(
+			"Linear RGB tint. Values above 1 are supported. "
+			"Tint is normalized to unit luminance; intensity is controlled separately.");
+
+		if (ImGui::Button("Neutral White##sun"))
+		{
+			tint = glm::vec3(1.0f);
+			tintChanged = true;
+		}
+
+		if (tintChanged)
+		{
+			if (std::isfinite(tint.x) &&
+				std::isfinite(tint.y) &&
+				std::isfinite(tint.z))
+			{
+				tint = glm::max(tint, glm::vec3(0.0f));
+
+				float luminance =
+					0.2126f * tint.r +
+					0.7152f * tint.g +
+					0.0722f * tint.b;
+
+				// A black tint cannot be normalized.
+				// Use zero illuminance to turn sunlight off.
+				if (luminance > 1e-6f)
+				{
+					tint /= luminance;
+
+					scene.sunlightColor = glm::vec4(
+						tint, scene.sunlightColor.w);
+				}
+			}
+		}
+
+		float illuminance = scene.sunlightColor.w;
+
+		if (ImGui::DragFloat(
+			"Illuminance##sun",
+			&illuminance,
+			100.0f,
+			0.0f, 1.0e9f,
+			"%.1f lux",
+			ImGuiSliderFlags_AlwaysClamp))
+		{
+			if (std::isfinite(illuminance))
+				scene.sunlightColor.w = std::max(illuminance, 0.0f);
+		}
+
+		ImGui::SetItemTooltip(
+			"Solar illuminance before atmospheric attenuation. "
+			"Ctrl-click for exact input. Zero disables the solar source.");
+
+		UI::separatorText("Sun Disc");
+
+		ImGui::SliderFloat(
+			"Angular Radius##sun",
+			&sky.sunAngularRadiusDeg,
+			0.05f, 2.0f,
+			"%.4f deg",
+			ImGuiSliderFlags_AlwaysClamp);
+
+		ImGui::SetItemTooltip(
+			"0.2666 degrees is the default. "
+			"Disc radiance adjusts with area to preserve illuminance.");
+
+		if (ImGui::TreeNode("Solar Scale##sun"))
+		{
+			ImGui::DragFloat(
+				"Multiplier##sun",
+				&sky.solarIntensityScale,
+				0.01f,
+				0.0f, 100.0f,
+				"%.3f",
+				ImGuiSliderFlags_AlwaysClamp);
+
+			ImGui::SetItemTooltip(
+				"Additional multiplier applied by the atmosphere lighting. "
+				"Keep at 1 for direct control through Illuminance.");
+
+			ImGui::TreePop();
 		}
 	}
 
@@ -628,8 +780,8 @@ namespace
 		ImGui::SliderFloat("Lag Strength", &flashlightReal.m_lagStrength, 10.0, 100.0f);
 		ImGui::SliderFloat("Sway Strength", &flashlightReal.m_swayStrength, 0.001f, 0.1f, "%.3f");
 		ImGui::SliderFloat("Source Radius##light", &flashlight.sourceRadius, 0.02, 0.3f);
+		ImGui::SliderFloat("Lumens##light", &flashlight.lumens, 50.0f, 3000.0f, "%.0f lm");
 		//ImGui::SliderFloat("light radius##light", &flashlight.radius, 5, 100.0f);
-		ImGui::SliderFloat("Intensity##light", &flashlight.intensity, 10.0f, 500.0f);
 		//ImGui::SliderFloat("light outer degree##light", &flashlight.outerDeg, 10.0f, 40.0f);
 		//ImGui::SliderFloat("light inner degree##light", &flashlight.innerDeg, 10.0f, 40.0f);
 		//ImGui::SliderFloat("Offset R##light", &flashlight.offsetRight, -0.2f, 0.2f, "%.2f");
@@ -685,12 +837,12 @@ namespace
 		const char* sunFilterModes[] = { "PCF", "PCSS", "Ray-Traced" };
 		int sunFilter = static_cast<int>(dbg.sunShadowFilter);
 
-		if (ImGui::Combo("Filter Mode##rt", &sunFilter, sunFilterModes, IM_ARRAYSIZE(sunFilterModes))) {
+		if (ImGui::Combo("Filter Mode##rt", &sunFilter, sunFilterModes, IM_ARRAYSIZE(sunFilterModes)))
+		{
 			dbg.sunShadowFilter = static_cast<uint32_t>(sunFilter);
 		}
 
-		const bool bRTSoft =
-			dbg.sunShadowFilter >= static_cast<uint32_t>(RD::SunShadowFilter::RT_SOFT);
+		const bool bRTSoft = dbg.sunShadowFilter >= static_cast<uint32_t>(RD::SunShadowFilter::RT_SOFT);
 
 		if (!bRTSoft)
 		{
@@ -718,6 +870,14 @@ namespace
 			if (shadowFar != static_cast<int>(shadowControl.shadowFar))
 			{
 				shadowControl.shadowFar = static_cast<float>(shadowFar);
+				World::GetScene().ShouldUpdateCascadeSplits();
+			}
+
+			float splitLambda = shadowControl.splitLambda;
+			ImGui::SliderFloat("Split Lambda##rt", &splitLambda, 0.94, 0.97, "%.2f");
+			if (splitLambda != shadowControl.splitLambda)
+			{
+				shadowControl.splitLambda = splitLambda;
 				World::GetScene().ShouldUpdateCascadeSplits();
 			}
 
@@ -759,7 +919,7 @@ namespace
 					12.0f,
 					"%.1f");
 
-				ImGui::DragFloat4(
+				ImGui::DragFloat3(
 					"Max Radius (texels)##rt",
 					&shadowControl.pcssMaxRadiusTexels.x,
 					0.1f,
@@ -822,39 +982,194 @@ namespace
 
 		const char* giModes[] = { "Off", "VBAO", "VBGI" };
 		UIWidgets::comboU32("GI Method", &dbg.giMode, giModes, IM_ARRAYSIZE(giModes));
-
 		if (dbg.giMode == static_cast<uint32_t>(RD::GIMethod::OFF)) return;
 
 		auto& s = profiler.ssgiSettings;
 
 		ImGui::SeparatorText("Trace");
-		ImGui::SliderFloat("Effect Radius##ssgi", &s.effectRadius, 0.5f, 25.0f);
-		ImGui::SetItemTooltip("Occlusion radius, and the GI gather radius. Wider costs dependent fetches.");
-		ImGui::SliderFloat("Falloff Range##ssgi", &s.effectFalloffRange, 0.0f, 1.0f);
+		ImGui::SliderFloat("Effect Radius##ssgi", &s.effectRadius, 0.5f, 25.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Radius Multiplier##ssgi", &s.radiusMultiplier, 0.5f, 3.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Falloff Range##ssgi", &s.effectFalloffRange, 0.01f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Sample Distribution Power##ssgi", &s.sampleDistributionPower, 1.0f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
-		ImGui::SliderFloat("Sample Distribution Power##ssgi", &s.sampleDistributionPower, 1.0, 3.0);
+		ImGui::SeparatorText("Spatial Denoise");
+		ImGui::SliderFloat("Blur Beta##ssgi", &s.denoiseBlurBeta, 0.1f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Upsample Depth Sigma##ssgi", &s.upsampleDepthSigma, 32.0f, 1024.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 
-		ImGui::SeparatorText("Denoise");
-		ImGui::SliderFloat("Blur Beta##ssgi", &s.denoiseBlurBeta, 1.0f, 2.0f);
-		ImGui::SliderFloat("Upsample Depth Sigma##ssgi", &s.upsampleDepthSigma, 32.0f, 1024.0f);
+		ImGui::SeparatorText("AO Temporal");
+		ImGui::SliderFloat("History Weight##ao", &s.aoHistoryWeight, 0.0f, 0.99f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Depth Tolerance##ao", &s.aoDepthTolerance,
+			0.001f, 0.1f, "%.3f", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Normal Threshold##ao", &s.aoNormalThreshold, 0.0f, 0.9999f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Max History Samples##ao", &s.aoMaxHistorySamples, 1.0f, 128.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Initial Variance##ao", &s.aoInitialVariance,
+			0.000001f, 0.0625f, "%.6f", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+
+		if (ImGui::TreeNode("Reconstruction Confidence##ao"))
+		{
+			ImGui::SliderFloat("Minimum Observation##ao", &s.aoMinObservation,
+				0.001f, 0.5f, "%.3f", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat("Neighborhood Confidence##ao", &s.aoNeighborConfidence,
+				s.aoMinObservation, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat("Clipping Confidence##ao", &s.aoClipConfidence,
+				s.aoMinObservation, 0.99f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat("History Footprint Support##ao", &s.aoHistoryFootprintMinSupport,
+				0.01f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNode("Clipping and Response##ao"))
+		{
+			ImGui::SliderFloat("Clip Sigma Multiplier##ao", &s.aoClipSigma, 0.0f, 4.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat("Maximum Clip Sigma##ao", &s.aoClipMaxSigma,
+				0.001f, 0.25f, "%.3f", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat("Minimum Clip Margin##ao", &s.aoClipMargin, 0.0f, 0.1f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat("Reactive Threshold##ao", &s.aoReactiveThreshold,
+				0.001f, 0.25f, "%.3f", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNode("Missing Observations##ao"))
+		{
+			ImGui::SliderFloat("Hold Frames##ao", &s.aoMissingHoldFrames, 0.0f, 32.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+			s.aoMissingMaxFrames = std::max(s.aoMissingMaxFrames, s.aoMissingHoldFrames + 1.0f);
+			ImGui::SliderFloat("Expiry Frames##ao", &s.aoMissingMaxFrames,
+				s.aoMissingHoldFrames + 1.0f, 64.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat("Missing History Age Retention##ao", &s.aoMissingAgeDecay,
+				0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::TreePop();
+		}
+
+		ImGui::TextDisabled("AO history: %s", s.aoHistoryValid != 0u ? "Available" : "Reset / unavailable");
+		ImGui::TextDisabled("Noise index: %u", static_cast<unsigned int>(s.noiseIndex));
 
 		if (dbg.giMode != static_cast<uint32_t>(RD::GIMethod::VBGI)) return;
-
 		auto& t = profiler.forwardPush;
-
 		ImGui::SeparatorText("Indirect");
-		ImGui::SliderFloat("GI Intensity##ssgi", &t.giIntensity, 0.0f, 25.0f);
-		ImGui::SliderFloat("Bounce Feedback##ssgi", &t.bounceFeedback, 0.0f, 1.0f);
-		ImGui::SetItemTooltip("Gain on the multi-bounce loop. Above ~0.85 bright rooms keep brightening.");
-		ImGui::SliderFloat("SH Fallback##ssgi", &s.giFallbackStrength, 0.0f, 1.0f);
-		ImGui::SetItemTooltip("Sky fill for sectors the trace closed but could not gather.");
-
-		ImGui::SeparatorText("Temporal");
-		ImGui::SliderFloat("Temporal Alpha##ssgi", &s.giTemporalAlpha, 0.02f, 0.5f, "%.3f");
-		ImGui::SetItemTooltip("Steady-state EMA rate. 0.08 converges over ~12 frames.");
-		ImGui::SliderFloat("Reproject Tolerance##ssgi", &s.giReprojTolerance, 0.02f, 0.3f, "%.3f");
-		ImGui::SliderFloat("Firefly Clamp##ssgi", &s.giClampMax, 0.5f, 32.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+		ImGui::SliderFloat("GI Intensity##ssgi", &t.giIntensity, 0.0f, 25.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SeparatorText("GI Temporal");
+		ImGui::SliderFloat("Current Frame Weight##gi", &s.giTemporalAlpha, 0.02f, 0.5f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Depth Tolerance##gi", &s.giReprojTolerance, 0.02f, 0.3f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Firefly Clamp##ssgi", &s.giClampMax,
+			0.5f, 32.0f, "%.2f", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
 	}
+
+	static void groupWorldProbes(UIContext& ui)
+	{
+		auto& s = ui.profiler->worldProbeSettings;
+		const WorldProbeHeader& h = ui.renderer->GetWorldProbeHeader();
+		ImGui::SeparatorText("Probe Shading");
+		ImGui::Checkbox("Reconstruction Direct Fallback##wp", &s.reconstructDirectFallback);
+		ImGui::Checkbox("Reconstruction Debug Colors##wp", &s.reconstructDebugView);
+		ImGui::SetItemTooltip("Inspect the reconstruction target directly: red=fallback, green=coverage, blue=compatible zero coverage. Diagnostic colors replace lighting.");
+		ImGui::Checkbox("Fog Probe Cache##wp", &s.cacheFog);
+		ImGui::Checkbox("Transparent Probe Cache##wp", &s.cacheTransparency);
+		ImGui::SetItemTooltip("Off means zero cached probe lighting for the cached transparent shader, not automatic direct sampling.");
+
+		ImGui::SeparatorText("System");
+		ImGui::Checkbox("Enable World Probes##wp", &s.enabled);
+		ImGui::Checkbox("Inject SSGI Bounce##wp", &s.injectSSGI);
+		ImGui::Checkbox("Pause Regular Updates##wp", &s.pauseUpdates);
+		ImGui::SetItemTooltip("Pauses both regular round robins and confidence decay. Newly scrolled-in and reset probes still initialize.");
+		ImGui::Checkbox("Freeze Clipmaps##wp", &s.freezeClipmaps);
+		ImGui::SetItemTooltip("Holds the resident windows in place. Regular lighting and geometry updates continue.");
+		ImGui::SeparatorText("Clipmap");
+		ImGui::Checkbox("Follow Camera##wp", &s.followCamera);
+		if (!s.followCamera) ImGui::DragFloat3("Anchor##wp", &s.anchor.x, 0.5f);
+		ImGui::DragFloat3("Center Bias##wp", &s.centerBias.x, 0.1f);
+		ImGui::DragFloat("Base Spacing##wp", &s.baseSpacing, 0.1f, 0.1f, 100.0f, "%.2f m", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SetItemTooltip("Changing base spacing resets all five cascades.");
+		ImGui::BeginDisabled();
+		ImGui::DragFloat("Spacing Multiplier##wp", &s.spacingMultiplier, 0.1f, 2.0f, 2.0f, "%.1f");
+		ImGui::EndDisabled();
+		ImGui::SetItemTooltip("The production preset fixes the multiplier at 2.");
+		ImGui::SliderFloat("View Forward Bias##wp", &s.viewForwardBias, 0.0f, 1.0f, "%.2f");
+		ImGui::SliderFloat("Scroll Hysteresis##wp", &s.scrollHysteresis, 0.0f, 4.0f, "%.2f cells");
+		ImGui::SliderFloat("Cascade Edge Fade##wp", &s.cascadeEdgeFade, 0.01f, 3.0f, "%.2f cells");
+		for (uint32_t c = 0u; c < 5u; ++c)
+		{
+			const auto& d = h.cascades[c];
+			const float spacing = d.originSpacing.w;
+			ImGui::Text("C%u: %.2f m | 16 x 8 x 16 | 2048 probes", c, spacing);
+			ImGui::Text("  Base %d, %d, %d | Footprint %.1f x %.1f x %.1f m",
+				d.baseCell.x, d.baseCell.y, d.baseCell.z, spacing * 16.0f, spacing * 8.0f, spacing * 16.0f);
+			ImGui::Text("  Full %u + %u | Relight %u + %u", d.schedule.x, d.schedule.y, d.schedule.z, d.schedule.w);
+		}
+		const double mib = 1.0 / (1024.0 * 1024.0);
+		const size_t probes = GetWorldProbeBufferBytes(RD::WORLD_PROBE_COUNT);
+		const size_t atlas = GetWorldProbeVisibilityBytes();
+		const size_t schedule = GetWorldProbeScheduleBytes();
+		const size_t summary = GetWorldProbeSummaryBytes();
+		ImGui::Text("Probes %.3f MiB | RG8 atlas %.3f MiB", probes * mib, atlas * mib);
+		ImGui::Text("Schedule %.3f MiB | Summaries %.3f MiB", schedule * mib, summary * mib);
+		ImGui::Text("Total %.3f MiB + %u bytes per frame", (probes + atlas + schedule + summary) * mib, unsigned(sizeof(WorldProbeFrameInfo)));
+
+		ImGui::SeparatorText("Scheduling");
+		int budget = int(s.probesPerFrame);
+		if (ImGui::SliderInt("Probes Per Frame##wp", &budget, 0, int(RD::WORLD_PROBE_COUNT)))
+			s.probesPerFrame = uint32_t(std::clamp(budget, 0, int(RD::WORLD_PROBE_COUNT)));
+		ImGui::SliderFloat("Full Update Ratio##wp", &s.fullUpdateRatio, 0.0f, 1.0f, "%.3f");
+		ImGui::SliderFloat("Cascade Priority Falloff##wp", &s.cascadePriorityFalloff, 0.01f, 1.0f, "%.2f");
+		ImGui::Checkbox("Quarter Resolution Scroll In##wp", &s.quarterResolutionScrollIn);
+		ImGui::SetItemTooltip("16 unique geometry rays per new probe. Turning this off initializes new probes with 64 rays.");
+		uint32_t fullBudget = 0u, relightBudget = 0u;
+		for (const auto& c : h.cascades) { fullBudget += c.schedule.y; relightBudget += c.schedule.w; }
+		ImGui::Text("Regular windows: %u full, %u relight", fullBudget, relightBudget);
+		ImGui::Text("Geometry rays <= %u + scroll work", fullBudget * 64u);
+		ImGui::Text("Scroll maximum: %u geometry rays", RD::WORLD_PROBE_COUNT * (s.quarterResolutionScrollIn ? 16u : 64u));
+		ImGui::TextDisabled("Fresh slots and overlapping windows reduce regular queue counts.");
+		ImGui::TextDisabled("SSGI injection can add up to 64 segment rays per queued probe.");
+
+		ImGui::SeparatorText("Visibility");
+		ImGui::DragFloat("Trace Distance##wp", &s.maxTraceDistance, 10.0f, 1.0f, 100000.0f, "%.1f m", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::DragFloat("Ray Bias##wp", &s.traceBias, 0.001f, 0.0001f, s.baseSpacing * 0.25f, "%.4f m", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("RG8 Variance Floor##wp", &s.visibilityVariance, 0.000001f, 0.1f, "%.6f", ImGuiSliderFlags_Logarithmic);
+		ImGui::SetItemTooltip("Normalized squared-distance variance. Increasing it can increase light leaking.");
+		ImGui::SliderFloat("Visibility Exponent##wp", &s.visibilityExponent, 1.0f, 128.0f, "%.1f");
+		ImGui::SliderFloat("Sky History Weight##wp", &s.skyHistoryWeight, 0.0f, 0.99f, "%.3f");
+		ImGui::SeparatorText("Relocation");
+		ImGui::Checkbox("Relocate Probes##wp", &s.relocation);
+		ImGui::DragFloat("Minimum Frontface Distance##wp", &s.minFrontfaceDistance, 0.01f, 0.001f, 100.0f, "%.3f m", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Backface Threshold##wp", &s.backfaceThreshold, 0.0f, 1.0f, "%.2f");
+		ImGui::SetItemTooltip("Inside when ratio >= threshold. At 0.25: 16/64 full rays or 4/16 quarter rays.");
+		ImGui::SliderFloat("Return Step##wp", &s.relocationReturnStep, 0.0f, 0.49f, "%.3f x spacing");
+		ImGui::SliderFloat("Cell Margin##wp", &s.relocationCellMargin, 0.001f, 0.49f, "%.3f x spacing");
+		ImGui::DragFloat("Move Epsilon##wp", &s.relocationMoveEpsilon, 0.001f, 0.00001f, s.baseSpacing * 0.1f, "%.4f m", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SeparatorText("Bounce Cache");
+		ImGui::DragFloat("Injection Radius##wp", &s.injectionRadius, 0.1f, 0.1f, 10000.0f, "%.2f m", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Bounce Update Rate##wp", &s.bounceUpdateRate, 0.001f, 1.0f, "%.3f");
+		ImGui::DragFloat("Confidence Half-Life##wp", &s.confidenceHalfLife, 0.1f, 0.05f, 120.0f, "%.2f s", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Minimum Sample Confidence##wp", &s.minSampleConfidence, 0.0f, 1.0f, "%.3f");
+		ImGui::SeparatorText("Debug");
+		ImGui::Checkbox("Draw Probes##wp", &s.debugDraw);
+		const char* cascades[] = { "All", "Cascade 0", "Cascade 1", "Cascade 2", "Cascade 3", "Cascade 4" };
+		int cascade = s.debugCascade + 1;
+		if (ImGui::Combo("Cascade##wp", &cascade, cascades, IM_ARRAYSIZE(cascades))) s.debugCascade = cascade - 1;
+		const char* modes[] = { "Irradiance", "Sky Visibility", "Bounce Confidence", "Distance", "State", "Cascade", "Schedule Class" };
+		int mode = int(s.debugMode);
+		if (ImGui::Combo("View##wp", &mode, modes, IM_ARRAYSIZE(modes))) s.debugMode = uint32_t(mode);
+		ImGui::Checkbox("Show Inactive##wp", &s.debugShowInactive);
+		ImGui::SliderFloat("Sphere Radius##wp", &s.debugRadius, 0.01f, 0.49f, "%.2f x spacing");
+		ImGui::DragFloat("Max Distance##wp", &s.debugMaxDistance, 1.0f, 1.0f, 10000.0f, "%.1f m", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat("Intensity##wp", &s.debugIntensity, 0.01f, 100.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+		if (s.debugMode == 4u)
+		{
+			ImGui::TextColored(ImVec4(0.1f, 0.3f, 1, 1), "Blue: never traced / needs full trace");
+			ImGui::TextColored(ImVec4(1, 0, 1, 1), "Magenta: inside, escape failed");
+			ImGui::TextColored(ImVec4(1, 0.05f, 0.05f, 1), "Red: inactive");
+			ImGui::TextColored(ImVec4(1, 0.55f, 0, 1), "Orange: relocated");
+			ImGui::TextColored(ImVec4(0, 1, 1, 1), "Cyan overlay: quarter result");
+			ImGui::TextColored(ImVec4(0.1f, 1, 0.2f, 1), "Green overlay: updated this frame");
+		}
+		if (ImGui::Button("Reset Probe Cache##wp")) ui.renderer->RequestWorldProbeReset();
+		ImGui::SameLine();
+		if (ImGui::Button("Restore Probe Defaults##wp"))
+		{
+			s = WorldProbeSettings{};
+			ui.renderer->RequestWorldProbeReset();
+		}
+	}
+
 
 	static void groupReflections(UIContext& ui)
 	{
@@ -895,49 +1210,186 @@ namespace
 		RD::RenderToggles& dbg = *ui.dbg;
 		Profiler& profiler = *ui.profiler;
 
-		auto& volSettings = profiler.volLightSettings;
+		auto& fog = profiler.froxelSettings;
+		auto& composite = profiler.compositePush;
 
 		UIWidgets::toggleU32("Enable Volumetrics##vol", &dbg.enableVolumetrics);
 
-		UI::separatorText("Fog");
+		if (!dbg.enableVolumetrics) return;
 
-		ImGui::SliderFloat("Density##vol", &volSettings.density, 0.0f, 0.03f, "%.3f");
-		ImGui::SliderFloat("Scattering##vol", &volSettings.scatteringStrength, 0.0f, 10.0f);
-		ImGui::SliderFloat("Extinction##vol", &volSettings.extinction, 0.0f, 1.0f);
-		ImGui::SliderFloat("Asymmetry Factor##vol", &volSettings.asymmetryFactor, 0.0f, 0.95f, "%.2f");
-		ImGui::SliderFloat("Height Falloff##vol", &volSettings.heightFalloff, 0.0f, 0.1f, "%.2f");
+		UI::separatorText("Medium");
 
-		ImGui::SliderInt("Beam Power##vol", &volSettings.beamPower, 2, 8);
+		ImGui::SliderFloat("Density##vol", &fog.density, 0.0f, 0.001f, "%.6f");
+		ImGui::SliderFloat("Scattering##vol", &fog.scatteringStrength, 0.0f, 10.0f);
+		ImGui::SliderFloat("Extinction##vol", &fog.extinction, 0.0f, 1.0f);
+		ImGui::SetItemTooltip("Absorption rate. Scales density into the extinction coefficient.");
+		ImGui::SliderFloat("Asymmetry Factor##vol", &fog.asymmetryFactor, 0.0f, 0.95f, "%.2f");
+		ImGui::SetItemTooltip("HG phase g. Higher values push scattering forward, tightening godrays.");
+		ImGui::SliderFloat("Height Falloff##vol", &fog.heightFalloff, 0.0f, 0.1f, "%.3f");
 
-		UI::separatorText("Ray March");
+		UI::separatorText("Local Lights");
 
-		ImGui::SliderFloat("Max Distance##vol", &volSettings.maxDistance, 5.0f, 100.0f);
-		ImGui::SliderFloat("Jitter Strength##vol", &volSettings.jitterStrength, 0.0f, 1.0f);
+		ImGui::SliderFloat("Light Intensity##vol", &fog.localLightIntensity, 0.0f, 4.0f, "%.2f");
+		ImGui::SetItemTooltip("Contribution of clustered local lights to the fog volume. 0 skips the cluster walk entirely.");
+
+		UI::separatorText("Volume");
+
+		float froxelNear = fog.froxelClips.x;
+		float froxelFar = fog.froxelClips.y;
+
+		bool clipsChanged = false;
+		clipsChanged |= ImGui::SliderFloat("Fog Near##vol", &froxelNear, 0.1f, 5.0f, "%.2f");
+		ImGui::SetItemTooltip("Front of the froxel grid. Raising it gains slice density everywhere.");
+		clipsChanged |= ImGui::SliderFloat("Fog Far##vol", &froxelFar, 20.0f, 400.0f, "%.0f");
+		ImGui::SetItemTooltip("Back of the froxel grid. Fog stops accumulating past this distance.");
+
+		if (clipsChanged)
+		{
+			froxelFar = std::max(froxelFar, froxelNear + 1.0f);
+
+			fog.froxelClips = glm::vec2(froxelNear, froxelFar);
+			composite.froxelClips = fog.froxelClips;
+		}
+
+		{
+			const float ratio = froxelFar / std::max(froxelNear, 1e-4f);
+			const float sliceRatio = std::pow(ratio, 1.0f / float(RD::FROXEL_GRID_Z));
+
+			UI::MetricTable table("FroxelVolume");
+			if (table) {
+				UI::metric("Grid", fmt::format("{} x {} x {}",
+					RD::FROXEL_GRID_X, RD::FROXEL_GRID_Y, RD::FROXEL_GRID_Z));
+				UI::metric("Depth Ratio", fmt::format("{:.1f}x", ratio));
+				UI::metric("Slice Step", fmt::format("{:.3f}x", sliceRatio),
+					(sliceRatio > 1.15f) ? Style::WARN : Style::MUTED);
+			}
+		}
 
 		UI::separatorText("Temporal");
-		ImGui::SliderFloat("History Weight##vol", &volSettings.historyWeight, 0.85f, 0.95f, "%.2f");
-		ImGui::SliderFloat("Clip Gamma##vol", &volSettings.clipGamma, 1.0f, 2.0f, "%.2f");
 
-		UI::separatorText("Blur");
+		ImGui::SliderFloat("History Weight##vol", &fog.historyWeight, 0.80f, 0.98f, "%.2f");
+		ImGui::SetItemTooltip("Fraction of the reprojected volume kept per frame. Higher is smoother but lags faster motion.");
+		ImGui::SliderFloat("Slice Jitter##vol", &fog.jitterStrength, 0.0f, 1.0f, "%.2f");
+		ImGui::SetItemTooltip("Per-frame offset of sample depth within each slice. Needs history weight to resolve.");
+	}
 
-		ImGui::SliderFloat("Blur Radius##vol", &volSettings.blurRadius, 1.0f, 4.0f, "%.0f");
-		ImGui::SliderFloat("Blur Depth Sigma##vol", &volSettings.blurDepthSigma, 0.1f, 2.0f, "%.2f");
-		ImGui::SliderFloat("Blur Weight Sigma##vol", &volSettings.blurWeightSigma, 0.5f, 2.0f, "%.2f");
+	static void groupAtmosphereSky(UIContext& ui)
+	{
+		auto& sky = ui.profiler->atmosphereSkySettings;
+
+		UI::separatorText("Scattering");
+
+		ImGui::SliderFloat(
+			"Mie Scattering Albedo##sky",
+			&sky.mieAlbedo,
+			0.0f, 1.0f,
+			"%.2f");
+
+		ImGui::SliderFloat(
+			"Mie Asymmetry##sky",
+			&sky.mieG,
+			0.0f, 0.95f,
+			"%.2f");
+
+		UI::separatorText("Ground");
+
+		ImGui::ColorEdit3(
+			"Ground Albedo##sky",
+			&sky.ground.x,
+			ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs);
+
+		ImGui::SetItemTooltip(
+			"Lambertian planet albedo for the sky-view bottom boundary. "
+			"0.1 water or dark rock, 0.3 neutral, 0.4+ sand or snow.");
+
+		UI::separatorText("Quality");
+
+		int samples = static_cast<int>(sky.viewSamples);
+
+		if (ImGui::SliderInt(
+			"Sky View Samples##sky",
+			&samples,
+			16, 256))
+		{
+			sky.viewSamples = static_cast<uint32_t>(samples);
+		}
+
+		UI::separatorText("World Placement");
+
+		ImGui::DragFloat3(
+			"Sea Level Origin##sky",
+			&sky.seaLevelOrigin.x,
+			1.0f);
+
+		ImGui::DragFloat(
+			"World To Kilometers##sky",
+			&sky.worldToKm,
+			0.00001f,
+			0.000001f, 1.0f,
+			"%.6f",
+			ImGuiSliderFlags_AlwaysClamp);
+
+		ImGui::SetItemTooltip(
+			"For world meters use 0.001. "
+			"Keep the camera above the bottom sphere and inside the atmosphere.");
+	}
+
+	static void groupAtmosphere(UIContext& ui)
+	{
+		auto& settings = ui.profiler->atmosphereSettings;
+		auto& p = settings.parameters;
+
+		UI::separatorText("Atmospheric Medium");
+		ImGui::TextUnformatted("Transport distances: km. Extinction coefficients: 1/km.");
+
+		ImGui::SliderFloat3("Rayleigh Extinction##atm", &p.rayleigh.x, 0.0f, 0.1f, "%.6f");
+		ImGui::SliderFloat("Rayleigh Scale Height##atm", &p.rayleigh.w, 0.1f, 20.0f, "%.2f km");
+		ImGui::SliderFloat3("Mie Extinction##atm", &p.mie.x, 0.0f, 0.1f, "%.6f");
+		ImGui::SetItemTooltip("Total aerosol extinction: scattering plus absorption. Phase does not affect transmittance.");
+		ImGui::SliderFloat("Mie Scale Height##atm", &p.mie.w, 0.1f, 10.0f, "%.2f km");
+
+		UI::separatorText("Absorption Layer");
+		ImGui::SliderFloat3("Absorption Extinction##atm", &p.absorption.x, 0.0f, 0.01f, "%.6f");
+		ImGui::SliderFloat("Absorption Density##atm", &p.absorption.w, 0.0f, 4.0f, "%.2f");
+		ImGui::SliderFloat("Layer Center##atm", &p.geometry.z, 0.0f, p.geometry.y, "%.1f km");
+		ImGui::SliderFloat("Layer Half Width##atm", &p.geometry.w, 0.1f, 50.0f, "%.1f km");
+		ImGui::SetItemTooltip("Triangular density profile. Zero beyond center +/- half width.");
+
+		UI::separatorText("Planet");
+		ImGui::SliderFloat("Planet Radius##atm", &p.geometry.x, 100.0f, 10000.0f, "%.1f km");
+		ImGui::SliderFloat("Atmosphere Thickness##atm", &p.geometry.y, 1.0f, 200.0f, "%.1f km");
+
+		UI::separatorText("Integration");
+		int samples = static_cast<int>(p.integration.x);
+		if (ImGui::SliderInt("Integration Samples##atm", &samples, 32, 1024))
+			p.integration.x = static_cast<uint32_t>(samples);
+		ImGui::SetItemTooltip("LUT rebuild only. Camera, sun direction and exposure changes do not rebuild it.");
+		if (ImGui::Button("Reset Medium##atm"))
+			p = AtmosphereParameters{};
+		SanitizeAtmosphere(p);
 	}
 
 	static void groupToneMapping(UIContext& ui)
 	{
 		Profiler& profiler = *ui.profiler;
+		auto& luma = profiler.lumaExposureSettings;
 
-		//const char* tmModes[] = { "ACES Film", /*"Gran Turismo 7"*/ };
-		//int currentTM = (int)dbg.tonemapper;
+		bool manual = luma.manualExposure != 0u;
+		if (ImGui::Checkbox("Manual Exposure##tm", &manual))
+			luma.manualExposure = manual ? 1u : 0u;
 
-		//if (ImGui::Combo("Mode", &currentTM, tmModes, IM_ARRAYSIZE(tmModes))) {
-		//	dbg.tonemapper = (uint32_t)currentTM;
-		//}
+		ImGui::BeginDisabled(!manual);
+		ImGui::SliderFloat("EV100##tm", &luma.manualEV100, -4.0f, 17.0f, "%.1f");
+		ImGui::EndDisabled();
 
-		auto& exposure = profiler.toneMappingSettings.cameraExposure;
-		ImGui::SliderFloat("Exposure", &exposure, 0.01f, 0.3f);
+		ImGui::BeginDisabled(manual);
+		ImGui::SliderFloat("Adapt Up##tm", &luma.adaptSpeedUp, 0.1f, 5.0f, "%.2f");
+		ImGui::SliderFloat("Adapt Down##tm", &luma.adaptSpeedDown, 0.1f, 5.0f, "%.2f");
+		ImGui::EndDisabled();
+
+		ImGui::SliderFloat("Compensation##tm", &luma.exposureCompensation, -3.0f, 3.0f, "%.2f");
+		ImGui::SliderFloat("Min EV100##tm", &luma.minEV100, -8.0f, 10.0f, "%.1f");
+		ImGui::SliderFloat("Max EV100##tm", &luma.maxEV100, 8.0f, 20.0f, "%.1f");
 	}
 
 	static void groupBloom(UIContext& ui)
@@ -950,17 +1402,31 @@ namespace
 		if (!dbg.enableBloom) return;
 
 		auto& bloom = profiler.bloomPush;
-		ImGui::SliderFloat("Bloom Intensity", &profiler.debugToggles.bloomIntensity, 0.03, 0.2f, "%.2f");
-		ImGui::SliderFloat("Bloom Threshold", &bloom.bloomThreshold, 0.01f, 3.0f, "%.2f");
-		ImGui::SliderFloat("Bloom Knee", &bloom.bloomKnee, 0.01f, 2.0f, "%.2f");
-		ImGui::SliderFloat("Emissive Boost", &bloom.emissiveBoost, 0.0, 10.0, "%.2f");
+		ImGui::SliderFloat("Bloom Intensity", &profiler.debugToggles.bloomIntensity, 0.001f, 0.1f, "%.3f");
+		ImGui::SliderFloat("Bloom Threshold", &bloom.bloomThreshold, 0.01f, 10.0f, "%.2f");
+		ImGui::SliderFloat("Bloom Knee", &bloom.bloomKnee, 0.01f, 5.0f, "%.2f");
 	}
 
 	static void groupChromaticAberration(UIContext& ui)
 	{
 		RD::RenderToggles& dbg = *ui.dbg;
+		Profiler& profiler = *ui.profiler;
+
+		auto& caSettings = profiler.caPush;
 
 		UIWidgets::toggleU32("Enable Chromatic Aberration##post", &dbg.enableChromaticAberration);
+
+		ImGui::BeginDisabled(dbg.enableChromaticAberration == 0);
+
+		ImGui::SliderFloat("Shift##post_ca", &caSettings.maxShiftPixels, 0.0f, 8.0f, "%.2f px");
+		ImGui::SliderFloat("Distortion##post_ca", &caSettings.distortionAmount, 0.0f, 0.30f, "%.3f");
+		ImGui::SliderFloat("Falloff##post_ca", &caSettings.falloffExponent, 1.0f, 6.0f, "%.2f");
+
+		int taps = int(caSettings.maxTaps);
+		if (ImGui::SliderInt("Max Taps##post_ca", &taps, 3, 16))
+			caSettings.maxTaps = uint32_t(taps);
+
+		ImGui::EndDisabled();
 	}
 
 	static void groupLensFlare(UIContext& ui)
@@ -976,13 +1442,7 @@ namespace
 		UIWidgets::toggleU32("Enable Lens Flare##post", &dbg.enableLensFlare);
 
 		UI::separatorText("Source");
-
-		ImGui::SliderFloat("Threshold##lf", &lf.brightThreshold, 0.25f, 40.0f, "%.2f", kLog);
-		ImGui::SliderFloat("Knee##lf", &lf.brightKnee, 0.0f, 20.0f, "%.2f", kClamp);
 		ImGui::SliderFloat("Intensity##lf", &lf.brightIntensity, 0.0f, 4.0f, "%.2f", kClamp);
-
-		ImGui::SameLine();
-		if (ImGui::SmallButton("Knee 0.5x##lf")) lf.brightKnee = lf.brightThreshold * 0.5f;
 
 		UI::separatorText("Halo");
 
@@ -1087,39 +1547,55 @@ namespace
 		}
 	}
 
+	static void groupPanels(UIContext& ui)
+	{
+		RD::RenderToggles& dbg = *ui.dbg;
+		Profiler& profiler = *ui.profiler;
+
+		ImGui::Checkbox("Shader Editor##panels", &profiler.enableShaderEditor);
+
+		ImGui::TextDisabled("Shader editor hides with this window (TAB).");
+	}
+
 	// -------------------------------------------------------------------------
 	// Category tables. Adding a control block is one row here; moving one
 	// between categories is a cut and paste of that row.
 	// -------------------------------------------------------------------------
 	static const ControlGroup RENDER_GROUPS[] = {
-		{ "Camera",           &groupCamera,         false },
-		{ "Async Compute",    &groupAsyncCompute,   false },
-		{ "Anti-Aliasing",    &groupAntiAliasing,   true  },
-		{ "Transparency",     &groupTransparency,   false },
+		{ "Panels",                  &groupPanels,         false },
+		{ "Execution / Async Compute", &groupAsyncCompute, false },
+		{ "Anti-Aliasing & Sharpness", &groupAntiAliasing,  true  },
+		{ "Transparency",            &groupTransparency,   false },
+	};
+
+	static const ControlGroup SKY_WEATHER_GROUPS[] = {
+		{ "Sun",                    &groupSun,             true  },
+		{ "Sky Scattering",         &groupAtmosphereSky,   false },
+		{ "Shadows",                &groupShadows,         false },
+		{ "Volumetric Fog",         &groupVolumetrics,     false },
+		{ "Atmospheric Medium",     &groupAtmosphere,      false },
 	};
 
 	static const ControlGroup LIGHTING_GROUPS[] = {
-		{ "Sun",                 &groupSun,              true  },
-		{ "Shadows",             &groupShadows,          false },
-		{ "Reflections",         &groupReflections,      false },
-		{ "Global Illumination", &groupSSGI,             false },
-		{ "Local Lights",        &groupLocalLights,      false },
-		{ "Flash Light",         &groupFlashlight,       false },
-		{ "Volumetrics",         &groupVolumetrics,      false },
-		{ "Environment",         &groupEnvironment,      false },
+		{ "Global Illumination & Occlusion", &groupSSGI,        false },
+		{ "World Probes",                    &groupWorldProbes, true  },
+		{ "Reflections",                     &groupReflections, false },
+		{ "Local Lights",                    &groupLocalLights, false },
+		{ "Flashlight",                      &groupFlashlight,  false }
 	};
 
 	static const ControlGroup POSTFX_GROUPS[] = {
-		{ "Tone Mapping",         &groupToneMapping,         true  },
-		{ "Bloom",                &groupBloom,               true  },
-		{ "Chromatic Aberration", &groupChromaticAberration, false },
-		{ "Lens Flare",           &groupLensFlare,           false },
+		{ "Camera",                 &groupCamera,              false },
+		{ "Exposure",               &groupToneMapping,         true  },
+		{ "Bloom",                  &groupBloom,               false },
+		{ "Lens Flare",             &groupLensFlare,           false },
+		{ "Chromatic Aberration",   &groupChromaticAberration, false },
 	};
 
 	static const ControlGroup DEBUG_GROUPS[] = {
-		{ "Culling",         &groupCullingDebug, true },
-		{ "Debug Draw",      &groupDebugDraw,    true },
-		{ "Shading Overlay", &groupDebugViews,   true },
+		{ "Culling",                &groupCullingDebug, true  },
+		{ "Debug Draw",             &groupDebugDraw,    false },
+		{ "Shading Overlay",        &groupDebugViews,   false },
 	};
 
 	struct SettingsCategoryEntry
@@ -1129,11 +1605,72 @@ namespace
 		int groupCount = 0;
 	};
 
+	static void groupShaderEditor(UIContext& ui)
+	{
+		Profiler& profiler = *ui.profiler;
+		auto& hot = ui.renderer->GetShaderHotReload();
+
+		ImGui::Checkbox("Open Shader Editor##shader", &profiler.enableShaderEditor);
+
+		UI::MetricTable table("ShaderState");
+		if (table)
+		{
+			UI::metric("Tracked shaders",
+				fmt::format("{}", ui.renderer->GetShaderCache().Records().size()));
+			UI::metric("Watching", hot.IsWatchEnabled() ? "yes" : "no");
+			UI::metric("Pending", fmt::format("{}", hot.PendingCount()));
+		}
+	}
+
+	static void panelShaderWindow(UIContext& ui)
+	{
+		ImGui::SetNextWindowSize(ImVec2(1000.0f, 720.0f), ImGuiCond_FirstUseEver);
+
+		UI::WindowScope window(
+			"Shader Editor",
+			&ui.profiler->enableShaderEditor,
+			ImGuiWindowFlags_NoCollapse);
+
+		if (!window) return;
+
+		ShaderEditorPanel::Get().Draw(*ui.renderer);
+	}
+
+	static const ControlGroup PIPELINE_GROUPS[] = {
+		{ "Shaders", &groupShaderEditor, true },
+	};
+
 	static const SettingsCategoryEntry SETTINGS_CATEGORIES[] = {
-		{ "Lighting", LIGHTING_GROUPS, IM_ARRAYSIZE(LIGHTING_GROUPS) },
-		{ "Render",   RENDER_GROUPS,   IM_ARRAYSIZE(RENDER_GROUPS)   },
-		{ "Post FX",  POSTFX_GROUPS,   IM_ARRAYSIZE(POSTFX_GROUPS)   },
-		{ "Debug",    DEBUG_GROUPS,    IM_ARRAYSIZE(DEBUG_GROUPS)    },
+		{
+			"Render",
+			RENDER_GROUPS,
+			IM_ARRAYSIZE(RENDER_GROUPS)
+		},
+		{
+			"Sky & Weather",
+			SKY_WEATHER_GROUPS,
+			IM_ARRAYSIZE(SKY_WEATHER_GROUPS)
+		},
+		{
+			"Scene Lighting",
+			LIGHTING_GROUPS,
+			IM_ARRAYSIZE(LIGHTING_GROUPS)
+		},
+		{
+			"Camera & Post",
+			POSTFX_GROUPS,
+			IM_ARRAYSIZE(POSTFX_GROUPS)
+		},
+		{
+			"Pipelines",
+			PIPELINE_GROUPS,
+			IM_ARRAYSIZE(PIPELINE_GROUPS)
+		},
+		{
+			"Debug",
+			DEBUG_GROUPS,
+			IM_ARRAYSIZE(DEBUG_GROUPS)
+		},
 	};
 
 	static_assert(
@@ -1163,7 +1700,7 @@ namespace
 		const float fps = stats.fps.Get();
 		const ImVec4& fpsColor =
 			(fps >= 100.0f) ? Style::GOOD :
-			(fps >=  45.0f) ? Style::WARN : Style::BAD;
+			(fps >= 45.0f) ? Style::WARN : Style::BAD;
 
 		{
 			UI::MetricTable table("FrameTimings");
@@ -1217,11 +1754,11 @@ namespace
 		FrameStats& stats = *ui.stats;
 
 		float    graphicsGpuMs = 0.0f;
-		float    asyncGpuMs    = 0.0f;
+		float    asyncGpuMs = 0.0f;
 		//float    graphicsCpuMs = 0.0f;
 		//float    asyncCpuMs    = 0.0f;
 		//uint32_t graphicsCount = 0u;
-		uint32_t asyncCount    = 0u;
+		uint32_t asyncCount = 0u;
 
 		const auto& allPassStats = profiler.GetAllPassStats();
 		for (const PassTimingStats& s : allPassStats)
@@ -1483,8 +2020,8 @@ namespace
 		Profiler& profiler = *ui.profiler;
 
 		static bool bHighlightAsync = true;
-		static bool bSortByCost     = false;
-		static bool bShowCpu        = true;
+		static bool bSortByCost = false;
+		static bool bShowCpu = true;
 
 		ImGui::Checkbox("Async##passes", &bHighlightAsync);
 		ImGui::SameLine();
@@ -1544,8 +2081,8 @@ namespace
 
 		for (uint32_t i = 0; i < activeCount; ++i)
 		{
-			const RD::Renderer_Pass passID    = static_cast<RD::Renderer_Pass>(order[i]);
-			const PassTimingStats&  passStats = allPassStats[order[i]];
+			const RD::Renderer_Pass passID = static_cast<RD::Renderer_Pass>(order[i]);
+			const PassTimingStats& passStats = allPassStats[order[i]];
 
 			ImGui::TableNextRow();
 
@@ -1665,17 +2202,23 @@ namespace
 	static const PanelRegistry& getPanelRegistry()
 	{
 		static const PanelRegistry registry = []
-		{
-			PanelRegistry built;
+			{
+				PanelRegistry built;
 
-			built.addPanel("SettingsWindow", &panelSettingsWindow,
-				[](const UIContext& ui) { return ui.dbg->enableSettings != 0u; });
+				built.addPanel("SettingsWindow", &panelSettingsWindow,
+					[](const UIContext& ui) { return ui.dbg->enableSettings != 0u; });
 
-			built.addPanel("ProfilerWindow", &panelProfilerWindow,
-				[](const UIContext& ui) { return ui.dbg->enableProfilerView != 0u; });
+				built.addPanel("ProfilerWindow", &panelProfilerWindow,
+					[](const UIContext& ui) { return ui.dbg->enableProfilerView != 0u; });
 
-			return built;
-		}();
+				built.addPanel("ShaderWindow", &panelShaderWindow,
+					[](const UIContext& ui)
+					{
+						return ui.profiler->enableShaderEditor && ui.dbg->enableSettings != 0u;
+					});
+
+				return built;
+			}();
 
 		return registry;
 	}
@@ -1718,7 +2261,6 @@ void Editor::InitImgui(
 
 	ImGuiIO& io = ImGui::GetIO();
 	io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange; // Prevent ImGui from overriding the cursor
-	io.ConfigFlags |= ImGuiConfigFlags_NoKeyboard;
 	io.IniFilename = nullptr; // Won't create imgui file
 
 	ImGui_ImplGlfw_InitForVulkan(window, true);
@@ -1740,6 +2282,12 @@ void Editor::InitImgui(
 
 	init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 
+	io.Fonts->AddFontDefault();
+	s_monoFont = io.Fonts->AddFontFromFileTTF("res/fonts/JetBrainsMono-Regular.ttf", 15.0f);
+
+	if (s_monoFont == nullptr)
+		fmt::println(stderr, "[Editor] mono font not found, using default");
+
 	ImGui_ImplVulkan_Init(&init_info);
 
 	glfwSetWindowFocusCallback(window, MyWindowFocusCallback);
@@ -1753,6 +2301,23 @@ void Editor::Shutdown(Renderer& renderer)
 
 void Editor::RenderImgui(Renderer& renderer)
 {
+	ImGuiIO& io = ImGui::GetIO();
+
+	ShaderEditorPanel::Get().PumpReports(renderer);
+
+	static bool wasShaderEditorOpen = false;
+	const bool isShaderEditorOpen = renderer.GetProfiler().enableShaderEditor;
+
+	if (wasShaderEditorOpen && !isShaderEditorOpen)
+		ShaderEditorPanel::Get().ClearLog();
+
+	wasShaderEditorOpen = isShaderEditorOpen;
+
+	if (io.WantTextInput)
+		io.ConfigFlags &= ~ImGuiConfigFlags_NoKeyboard;
+	else
+		io.ConfigFlags |= ImGuiConfigFlags_NoKeyboard;
+
 	ImGui_ImplGlfw_NewFrame();
 	ImGui_ImplVulkan_NewFrame();
 	ImGui::NewFrame();
@@ -1761,6 +2326,7 @@ void Editor::RenderImgui(Renderer& renderer)
 	ui.profiler = &renderer.GetProfiler();
 	ui.stats = &renderer.GetFrameStats();
 	ui.dbg = &renderer.GetRenderToggles();
+	ui.renderer = &renderer;
 
 	getPanelRegistry().draw(ui);
 

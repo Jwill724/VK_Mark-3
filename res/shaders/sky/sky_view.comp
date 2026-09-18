@@ -1,0 +1,49 @@
+#version 460
+
+#extension GL_GOOGLE_include_directive : require
+
+#include "../include/common.glsl"
+#include "../include/atmosphere_lighting.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1, rgba32f) writeonly uniform image2D outSkyView;
+layout(push_constant) uniform AtmosphereSky
+{
+	AtmosphereParameters parameters;
+	vec4 placement;
+	vec4 scattering;
+	vec4 sun;
+	uvec4 options;
+} pc;
+
+void main()
+{
+	ivec2 cell = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 extent = imageSize(outSkyView);
+	if (any(greaterThanEqual(cell, extent))) return;
+
+	SceneData scene = getSceneData();
+	vec3 sunDir = normalize(scene.sunlightDirection.xyz);
+	vec3 solarE = max(scene.sunlightColor.rgb * scene.sunlightColor.a * pc.sun.y, vec3(0.0));
+	float h;
+	vec3 up;
+	atmosphereCamera(pc.parameters, scene.cameraPos.xyz, pc.placement, h, up);
+	vec3 dir;
+	bool hitsGround;
+	atmosphereSkyViewDecode(pc.parameters, h, cell, extent, up, sunDir, dir, hitsGround);
+	vec3 sky = integrateAtmosphereSky(
+		pc.parameters,
+		h,
+		up,
+		dir,
+		sunDir,
+		solarE,
+		pc.scattering.x,
+		pc.scattering.y,
+		atmosphereGroundAlbedo(),
+		atmosphereGroundSkylight(up),
+		pc.options.x,
+		hitsGround);
+
+	imageStore(outSkyView, cell, vec4(max(sky, vec3(0.0)), 1.0));
+}

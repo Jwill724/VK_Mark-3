@@ -465,6 +465,7 @@ void DrawPreparation::UploadGPUBuffersForFrame(
 	const std::vector<uint32_t>&      rtRows,
 	Scene&                            scene,
 	const std::vector<LocalLight>&    lights,
+	const glm::vec4                   defaultLuminance,
 	bool                              bMotionNeeded)
 {
 	auto& frameStaging  = allocator.FrameStaging;
@@ -476,13 +477,14 @@ void DrawPreparation::UploadGPUBuffersForFrame(
 	const auto& staticTransforms  = scene.GetStaticTransforms();
 
 	const bool uploadInstances = frameCtx.IsInstanceInputsUploadNeeded();
-	const bool uploadLights    = frameCtx.IsLightsUploadNeeded();
-	const bool uploadStatic    = scene.IsStaticTransformsDirty();
+	const bool uploadLights = frameCtx.IsLightsUploadNeeded();
+	const bool uploadStatic = scene.IsStaticTransformsDirty();
+	const bool uploadLuminance = frameCtx.IsLuminanceResetNeeded();
 
 	const bool uploadDynamic = !dynamicTransforms.empty();
-	const bool uploadMotion  = uploadDynamic && bMotionNeeded && !motionMatrices.empty();
+	const bool uploadMotion = uploadDynamic && bMotionNeeded && !motionMatrices.empty();
 
-	if (!uploadInstances && !uploadLights && !uploadStatic &&
+	if (!uploadInstances && !uploadLights && !uploadStatic && !uploadLuminance &&
 		!uploadDynamic && !frameAddrTable.IsTableDirty()) return;
 
 	struct UploadPlan
@@ -495,6 +497,9 @@ void DrawPreparation::UploadGPUBuffersForFrame(
 		StagedWrite staticTransforms{};
 		//uint32_t    globalAddrVersion = UINT32_MAX;
 		//bool        hasGlobalAddrTable = false;
+
+		StagedWrite luminance{};
+		bool        hasLuminance = false;
 
 		bool instanceUploadNeeded = false;
 		bool hasStaticTransforms  = false;
@@ -626,6 +631,18 @@ void DrawPreparation::UploadGPUBuffersForFrame(
 		plan.frameAddrVersion = frameAddrTable.GetCpuVersion();
 	}
 
+	// Luminance header reset
+	if (uploadLuminance)
+	{
+		plan.luminance = frameStaging.Stage(
+			&defaultLuminance,
+			sizeof(glm::vec4),
+			globalBDATable.GetGPUBuffer(RD::Renderer_Buffer::Luminance).m_buffer,
+			0);
+
+		plan.hasLuminance = true;
+	}
+
 	frameStaging.Flush();
 	if (plan.hasStaticTransforms) globalStaging.Flush();
 
@@ -700,6 +717,15 @@ void DrawPreparation::UploadGPUBuffersForFrame(
 				device.GetContext());
 
 			frameCtx.SetPendingAddrTableVersion(plan.frameAddrVersion);
+		}
+
+		if (plan.hasLuminance)
+		{
+			frameStaging.CopyCommand(cmd, plan.luminance);
+			BufferBarriers::TransferReleaseOnGraphics(
+				cmd,
+				globalBDATable.GetGPUBuffer(RD::Renderer_Buffer::Luminance),
+				device.GetContext());
 		}
 
 	}, frameCtx.GetTransferPool(), QueueType::Transfer);

@@ -46,14 +46,19 @@ void RegisterSwapchainPresentPass(RenderGraph& graph)
 							ctx.frameState->InstancesActive() &&
 							!ctx.frameState->DebugRendering();
 
+						const bool canUseSharpened =
+							ctx.frameState->IsSharpeningOn() &&
+							ctx.frameState->IsTemporalValid() &&
+							isNormalFrame;
+
 						AllocatedImage srcImage;
-						if (ctx.frameState->IsChromaticAberrationOn() && !ctx.frameState->IsSharpeningOn() && isNormalFrame)
-						{
-							srcImage = postNonAAComposite;
-						}
-						else if (ctx.frameState->IsSharpeningOn() && isNormalFrame)
+						if (canUseSharpened)
 						{
 							srcImage = sharpenedColor;
+						}
+						else if (ctx.frameState->IsChromaticAberrationOn() && isNormalFrame)
+						{
+							srcImage = postNonAAComposite;
 						}
 						else
 						{

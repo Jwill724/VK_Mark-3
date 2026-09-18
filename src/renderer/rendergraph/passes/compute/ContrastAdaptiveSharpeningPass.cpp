@@ -26,6 +26,7 @@ void RegisterCASPass(RenderGraph& graph)
 					{
 						return
 							ctx.frameState->IsSharpeningOn() &&
+							ctx.frameState->IsTemporalValid() &&
 							ctx.frameState->InstancesActive() &&
 							!ctx.frameState->DebugRendering();
 					})
@@ -59,7 +60,7 @@ void RegisterCASPass(RenderGraph& graph)
 						const AllocatedImage& srcImage =
 							ctx.frameState->IsChromaticAberrationOn() ? postNonAAComposite : tonemap;
 
-						pass.scope = ComputeScope{ { graph.GetRenderExtent() }, WORKGROUP_8x8 };
+						pass.scope = ComputeScope{ { graph.GetDisplayExtent() }, WORKGROUP_8x8 };
 						auto& pso = std::get<ComputeScope>(pass.scope);
 
 						pso.SetPush(ctx.profiler->casSettings);

@@ -14,6 +14,10 @@
 #include "profiler/Profiler.h"
 #include "rendergraph/RenderGraph.h"
 #include "rendergraph/RenderGraphResources.h"
+#include "backend/shaders/ShaderCache.h"
+#include "backend/shaders/ShaderHotReload.h"
+#include "scene/AtmosphereState.h"
+#include "scene/WorldProbeTypes.h"
 
 namespace RD = RendererDefinitions;
 
@@ -95,6 +99,19 @@ public:
 	// Returns false when the renderer is not presentable this frame.
 	bool ResolveResize(Extents2D liveExtent);
 
+	ShaderCache& GetShaderCache() { return m_shaderCache; }
+	ShaderHotReload& GetShaderHotReload() { return m_shaderHotReload; }
+
+	float GetAdaptedEV100() const;
+
+	void RequestWorldProbeReset() noexcept;
+	void OnWorldProbesSubmitted() noexcept;
+
+	const WorldProbeHeader& GetWorldProbeHeader() const noexcept
+	{
+		return m_worldProbesHeader;
+	}
+
 private:
 	uint32_t m_frameNumber = 0;
 	uint32_t m_framesInFlight = 0;
@@ -111,7 +128,7 @@ private:
 	void CreateRenderGraph();
 	void DestroyRenderGraph();
 
-	void InitFrameResources(uint32_t threadCount);
+	void InitFrameResources(JobSystem& jobSystem);
 	void CleanupFrameResources();
 
 	void CheckGlobalDescriptorSetSync();
@@ -166,6 +183,9 @@ private:
 
 	DescriptorWriter m_mainWriter;
 
+	ShaderCache     m_shaderCache;
+	ShaderHotReload m_shaderHotReload;
+
 	std::unique_ptr<DescriptorManager> m_descriptorManager;
 	std::unique_ptr<PipelineManager> m_pipelineManager;
 	std::unique_ptr<Device> m_device;
@@ -202,6 +222,8 @@ private:
 		bool enableProfilerView,
 		bool enableSettings);
 
+	void ApplyPushConstantDefaults();
+
 	ResizeCoordinator m_resize;
 
 	void DrainFrameContexts();
@@ -213,8 +235,32 @@ private:
 
 	uint32_t m_activeEnvSet = UINT32_MAX;
 
-	glm::vec4 m_luminanceSums[RD::MAX_LUMINANCE_GROUPS] = { glm::vec4(0.0f) };
+	void RequestLuminanceReset() noexcept { m_bLuminanceResetPending = true; }
+	bool m_bLuminanceResetPending = true;
+	glm::vec4 m_defaultLuminance{};
+
+	std::array<glm::vec4, RD::MAX_LUMINANCE_GROUPS> m_luminanceSums = { glm::vec4(0.0f) };
 	glm::vec3 m_shIrradiance[RD::MAX_ENVIRONMENT_SETS] = { glm::vec3(0.0f) };
 
 	std::atomic<uint32_t> m_checkpointPassCounter{ 0 };
+
+	uint32_t m_lastManualExposure = 0;
+
+	AllocatedBuffer m_luminanceReadbackBuffer;
+	const std::array<glm::vec4, RD::MAX_LUMINANCE_GROUPS>* m_luminanceMapped = nullptr;
+	std::array<glm::vec4, RD::MAX_LUMINANCE_GROUPS> m_luminanceSumsReadback{};
+
+	AllocatedBuffer m_atmosphereResources_UBO;
+	AtmosphereState m_atmosphereState;
+
+	void UpdateWorldProbes(
+		bool geometryDirty,
+		bool ssgiValid,
+		float deltaSeconds);
+
+	WorldProbeHeader m_worldProbesHeader{};
+	WorldProbePush m_worldProbesPush{};
+	WorldProbeRuntimeState m_worldProbesState{};
+
+	bool m_aoRanPreviousFrame = false;
 };

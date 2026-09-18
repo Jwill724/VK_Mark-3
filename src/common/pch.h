@@ -56,6 +56,3 @@
 #include "imgui_impl_vulkan.h"
 
 #include "common/glm_common.hpp"
-
-#include "assets/AreaTex.h"
-#include "assets/SearchTex.h"

@@ -1,0 +1,50 @@
+#version 460
+
+#extension GL_GOOGLE_include_directive : require
+
+#include "../include/nrd_common.glsl"
+#include "../include/rt_shadow_common.glsl"
+#include "../include/rt_shadow.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = PUSH_SET, binding = PUSH_BINDING_READ_1) uniform sampler2D uDepth;
+layout(set = PUSH_SET, binding = PUSH_BINDING_READ_2) uniform sampler2D uViewNormals;
+layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1, r32f) uniform writeonly image2D uPenumbraOut;
+
+void main()
+{
+	RTRayListBuffer rays = getRTRayListBuffer();
+	uint rayIndex = gl_GlobalInvocationID.x;
+	if (rayIndex >= rtRayCount(rays, RT_RAY_SLOT_SHADOW, sp.rayCapacity)) return;
+
+	ivec2 px = ivec2(rtUnpackPixel(rays.payload[sp.rayBase + rayIndex]));
+	SceneData sd = getSceneData();
+
+	float depth = texelFetch(uDepth, px, 0).r;
+	vec3 nVS = octDecode(texelFetch(uViewNormals, px, 0).rg * 2.0 - 1.0);
+	vec2 uv = (vec2(px) + 0.5) * sp.invResolution;
+
+	ViewReconstructResult vr =
+		reconstructWorldPosFromDepth(uv, depth, sd.invProj, sd.invView);
+
+	vec3 N = normalize(mat3(sd.invView) * nVS);
+	vec3 origin = vr.pos + N * rtSurfaceBias(sp.shadow, vr.viewDepth);
+
+	vec2 rnd = rtShadowSTBN(px, sp.shadowStbnID, sd.temporal.x);
+
+	float phi = TWO_PI * rnd.x;
+	float r = TAN_SUN_ANGULAR_RADIUS * sqrt(rnd.y);
+
+	vec3 L = normalize(sp.shadow.sunDirectionWS.xyz
+		+ sp.shadow.sunTangentWS.xyz * (r * cos(phi))
+		+ sp.shadow.sunBitangentWS.xyz * (r * sin(phi)));
+
+	float t = rtShadowClosestHit(origin, L,
+		sp.shadow.sunDirectionWS.w,
+		sp.shadow.sunTangentWS.w,
+		sp.shadow.sunBitangentWS.w);
+
+	imageStore(uPenumbraOut, px,
+		vec4(SIGMA_FrontEnd_PackPenumbra(t, TAN_SUN_ANGULAR_RADIUS)));
+}

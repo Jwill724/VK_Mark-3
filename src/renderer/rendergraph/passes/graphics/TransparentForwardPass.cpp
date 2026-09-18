@@ -24,7 +24,31 @@ void RegisterTransparentForwardPass(RenderGraph& graph)
 						return ctx.frameState->InstancesActive();
 					})
 
+				.RequireResourceIf(
+					RD::Renderer_RenderTarget::DirectionalCSMAtlas,
+					RD::ImageAccess::DepthRead,
+					[](const RD::RenderStateInfo& state)
+					{
+						return state.IsShadowsOn() && !state.RTShadowsEnabled();
+					})
+
 				.ReadResource(
+					RD::Renderer_RenderTarget::WorldProbeSpatialCache,
+					RD::ImageAccess::Read)
+
+				.RequireResource(
+					RD::Renderer_RenderTarget::AtmosphereTransmittance,
+					RD::ImageAccess::Read)
+
+				.RequireResource(
+					RD::Renderer_RenderTarget::AtmosphereSkyView,
+					RD::ImageAccess::Read)
+
+				.RequireResource(
+					RD::Renderer_RenderTarget::AtmosphereLighting,
+					RD::ImageAccess::Read)
+
+				.RequireResource(
 					RD::Renderer_RenderTarget::DepthResolved,
 					RD::ImageAccess::DepthRead)
 
@@ -68,10 +92,10 @@ void RegisterTransparentForwardPass(RenderGraph& graph)
 							frameCtx->GetGPUBuffer(RD::Renderer_Buffer::TaskDispatch).m_buffer;
 
 						const auto& depthResolved = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::DepthResolved);
-						const auto& rtShadowDenoised = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::RTShadowDenoised);
 						const auto& transparentAccum = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::TransparentAccumulation);
 						const auto& transparentReveal = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::TransparentRevealage);
 						const auto& transparentVelocityAccum = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::TransparentVelocityAccum);
+						const auto& probeCache = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::WorldProbeSpatialCache);
 						const auto nearestClampSampler = ctx.imageTable->GetSampler(RD::Renderer_Sampler::NearestClamp);
 						const auto linearClampSampler = ctx.imageTable->GetSampler(RD::Renderer_Sampler::LinearClamp);
 
@@ -102,13 +126,13 @@ void RegisterTransparentForwardPass(RenderGraph& graph)
 
 						pso.SetPush(ctx.profiler->forwardPush);
 
+						pso.BeginRendering(cmd);
+
 						pso.BindReadImage(
 							pass.pushWriter,
-							RD::PUSH_BINDING_READ_1,
-							rtShadowDenoised,
-							nearestClampSampler);
-
-						pso.BeginRendering(cmd);
+							RD::PUSH_BINDING_READ_10,
+							probeCache,
+							linearClampSampler);
 
 						pso.DrawMeshTasksIndirectCount(
 							cmd,

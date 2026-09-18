@@ -1,0 +1,26 @@
+#version 460
+
+#extension GL_GOOGLE_include_directive : require
+
+#include "../include/common.glsl"
+#include "../include/atmosphere_math.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1, rgba16f) writeonly uniform image2D outTransmittance;
+layout(push_constant) uniform AtmospherePush
+{
+	AtmosphereParameters parameters;
+} pc;
+
+void main()
+{
+	ivec2 cell = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 extent = imageSize(outTransmittance);
+	if (any(greaterThanEqual(cell, extent))) return;
+
+	float h;
+	float mu;
+	atmosphereTransmittanceDecode(pc.parameters, (vec2(cell) + 0.5) / vec2(extent), vec2(extent), h, mu);
+	vec3 T = integrateAtmosphereTransmittance(pc.parameters, h, mu);
+	imageStore(outTransmittance, cell, vec4(T, 1.0));
+}

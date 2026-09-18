@@ -47,7 +47,7 @@ void RegisterLensFlarePass(RenderGraph& graph)
 					VK_REMAINING_MIP_LEVELS)
 
 				.ReadResource(
-					RD::Renderer_RenderTarget::VolumetricLight,
+					RD::Renderer_RenderTarget::FroxelIntegrated,
 					RD::ImageAccess::Read)
 
 				.WriteResource(
@@ -71,8 +71,7 @@ void RegisterLensFlarePass(RenderGraph& graph)
 
 						VkCommandBuffer cmd = ctx.commandBuffer;
 
-						const auto& volumetricLight = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::VolumetricLight);
-						const auto& dummy = ctx.imageTable->GetStaticTexture(RD::Renderer_Texture::Dummy);
+						const auto& volumetricFog = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::FroxelIntegrated);
 						const auto& hiZ = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::HiZ);
 						const auto& flareBright = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::FlareBright);
 						const auto& lensflareColor = ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::LensFlareColor);
@@ -85,8 +84,7 @@ void RegisterLensFlarePass(RenderGraph& graph)
 							? ctx.imageTable->GetRenderTarget(RD::Renderer_RenderTarget::HDRScene)
 							: ctx.imageTable->GetRenderTarget(TemporalHistory::GetColorHistorySlots(ctx.frameState->GetTemporalIndex()).write);
 
-						const auto& displayExtent = graph.GetDisplayExtent();
-						pass.scope = ComputeScope{{ displayExtent.Width() / 4, displayExtent.Height() / 4 }};
+						pass.scope = ComputeScope{{ flareBright.Width(), flareBright.Height() }};
 						auto& pso = std::get<ComputeScope>(pass.scope);
 
 						auto& lensFlarePush = ctx.profiler->lensFlareSettings;
@@ -96,25 +94,45 @@ void RegisterLensFlarePass(RenderGraph& graph)
 
 						const auto& sceneData = ctx.scene->GetSceneData();
 
-						glm::vec3 cameraWorldPos = glm::vec3(ctx.scene->GetCamera().GetPosition());
-						glm::vec3 sunDirWorld = glm::normalize(glm::vec3(sceneData.sunlightDirection));
-						glm::vec3 sunWorldPos = cameraWorldPos + sunDirWorld * 10000.0f;
+						glm::vec3 sunDirWorld = glm::normalize(
+							glm::vec3(sceneData.sunlightDirection));
 
-						glm::vec4 clip = sceneData.projUnjittered * sceneData.view * glm::vec4(sunWorldPos, 1.0f);
-						bool inFront = (clip.w > 0.0f);
+						glm::vec3 sunDirView = glm::mat3(sceneData.view) * sunDirWorld;
 
-						glm::vec3 ndc = glm::vec3(clip) / clip.w;
-						glm::vec2 uv{ ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f };
+						glm::vec4 clip = sceneData.projUnjittered
+							* glm::vec4(sunDirView, 0.0f);
 
-						constexpr float kEdgeMargin = 0.06f;
-						glm::vec2 outside = glm::max(glm::vec2(0.0f), glm::max(-uv, uv - glm::vec2(1.0f)));
-
-						float edgeFade = 1.0f - glm::clamp(glm::length(outside) / kEdgeMargin, 0.0f, 1.0f);
-						edgeFade = edgeFade * edgeFade * (3.0f - 2.0f * edgeFade);
-
-						lensFlarePush.sunUv = uv;
-						lensFlarePush.sunVisible = inFront ? edgeFade : 0.0f;
+						lensFlarePush.sunUv = glm::vec2(0.5f);
+						lensFlarePush.sunVisible = 0.0f;
 						lensFlarePush.sunJitterScale = 0.0f;
+
+						if (clip.w > 1e-6f)
+						{
+							glm::vec2 ndc = glm::vec2(clip) / clip.w;
+
+							glm::vec2 uv{
+								ndc.x * 0.5f + 0.5f,
+								0.5f - ndc.y * 0.5f
+							};
+
+							constexpr float kEdgeMargin = 0.06f;
+
+							glm::vec2 outside = glm::max(
+								glm::vec2(0.0f),
+								glm::max(-uv, uv - glm::vec2(1.0f)));
+
+							float edgeFade = 1.0f - glm::clamp(
+								glm::length(outside) / kEdgeMargin,
+								0.0f, 1.0f);
+
+							edgeFade = edgeFade * edgeFade * (3.0f - 2.0f * edgeFade);
+
+							lensFlarePush.sunUv = uv;
+							lensFlarePush.sunVisible = edgeFade;
+						}
+
+						lensFlarePush.froxelClips = ctx.profiler->compositePush.froxelClips;
+						lensFlarePush.fogEnabled = ctx.frameState->VolumetricFogActive();
 
 						pso.SetPush(lensFlarePush);
 
@@ -129,23 +147,11 @@ void RegisterLensFlarePass(RenderGraph& graph)
 							hdrScene,
 							linearClampSampler);
 
-						if (ctx.frameState->InstancesActive() &&
-							ctx.frameState->IsVolumetricsOn())
-						{
-							pso.BindReadImage(
-								pass.pushWriter,
-								RD::PUSH_BINDING_READ_2,
-								volumetricLight,
-								linearClampSampler);
-						}
-						else
-						{
-							pso.BindReadImage(
-								pass.pushWriter,
-								RD::PUSH_BINDING_READ_2,
-								dummy,
-								linearClampSampler);
-						}
+						pso.BindReadImage(
+							pass.pushWriter,
+							RD::PUSH_BINDING_READ_2,
+							volumetricFog,
+							linearClampSampler);
 
 						// =============
 						// Flare bright

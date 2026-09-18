@@ -93,12 +93,17 @@ public:
 		m_depthStencil.maxDepthBounds = 1.0f;
 	}
 
-	bool CreatePipeline(
+	// Returns the raw result so runtime rebuilds can reject a bad shader
+	// without aborting. Init path asserts on the return value instead.
+	VkResult CreatePipeline(
 		PipelineHandle& handle,
 		const std::vector<VkPipelineShaderStageCreateInfo>& stages,
+		VkPipelineCache                                     cache,
 		VkDevice                                            device)
 	{
-		if (stages.empty()) return false;
+		if (stages.empty()) return VK_ERROR_INITIALIZATION_FAILED;
+
+		handle.pipeline = VK_NULL_HANDLE;
 
 		if (handle.bindPoint == VK_PIPELINE_BIND_POINT_COMPUTE)
 		{
@@ -109,8 +114,7 @@ public:
 				.layout = m_pipelineLayout,
 			};
 
-			VK_CHECK(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &computeInfo, nullptr, &handle.pipeline));
-			return true;
+			return vkCreateComputePipelines(device, cache, 1, &computeInfo, nullptr, &handle.pipeline);
 		}
 
 		VkPipelineViewportStateCreateInfo viewportState{ .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
@@ -145,8 +149,7 @@ public:
 		pipelineInfo.pDynamicState = &dynamicInfo;
 		pipelineInfo.layout = m_pipelineLayout;
 
-		VK_CHECK(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &handle.pipeline));
-		return true;
+		return vkCreateGraphicsPipelines(device, cache, 1, &pipelineInfo, nullptr, &handle.pipeline);
 	}
 
 private:

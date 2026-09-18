@@ -1,9 +1,10 @@
-#version 450
+#version 460
 
 #extension GL_GOOGLE_include_directive : require
-#extension GL_ARB_separate_shader_objects : require
 
 #include "../include/common.glsl"
+#include "../include/depth.glsl"
+#include "../include/ssgi_push.glsl"
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
@@ -12,92 +13,85 @@ layout(set = PUSH_SET, binding = PUSH_BINDING_READ_2) uniform sampler2D inBentAO
 layout(set = PUSH_SET, binding = PUSH_BINDING_READ_3) uniform sampler2D inViewNormals;
 layout(set = PUSH_SET, binding = PUSH_BINDING_READ_4) uniform sampler2D inGIHalf;
 
-layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1) writeonly uniform image2D outBentAO;
-layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_2) writeonly uniform image2D outGI;
+layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1, rgba8) writeonly uniform image2D outBentAO;
+layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_2, rgba16f) writeonly uniform image2D outGI;
+// R = reconstructed AO before RGBA8 quantization; G = geometry support [0,1].
+layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_3, rg16f) writeonly uniform image2D outAOReconstruction;
 
-layout(push_constant) uniform PushConstantData {
-	float effectRadius;
-	float effectFalloffRange;
-	vec2  ndcToViewMul_x_PixelSize;
+void main()
+{
+	SceneData s = getSceneData();
+	ivec2 full = ivec2(s.renderExtentSize.xy);
+	ivec2 halfExt = (full + 1) / 2;
+	ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+	if (any(greaterThanEqual(p, full))) return;
 
-	float radiusMultiplier;
-	float sampleDistributionPower;
-	uint  noiseIndex;
-	uint  hilbertLutID;
-	float denoiseBlurBeta;
+	ivec2 phase = aoQuadPhase(s.temporal.x, IsTAAEnabled());
+	vec3 n = octDecode(texelFetch(inViewNormals, p, 0).rg * 2.0 - 1.0);
+	vec3 wn = normalize(mat3(s.invView) * n);
+	float z = texelFetch(inHiZ, p, 0).r;
+	vec2 h = (vec2(p) - vec2(phase)) * 0.5;
+	vec2 f = fract(h);
+	ivec2 base = ivec2(floor(h));
 
-	uint  isFinalPass;
-	float upsampleDepthSigma;
-	float giClampMax;
-	float giReprojTolerance;
+	vec3 bent = vec3(0.0);
+	float ao = 0.0;
+	float ws = 0.0;
+	float support = 0.0;
+	vec4 gi = vec4(0.0);
 
-	float giTemporalAlpha;
-	float giFallbackStrength;
-} pc;
+	for (int k = 0; k < 4; ++k)
+	{
+		ivec2 o = ivec2(k & 1, k >> 1);
+		ivec2 hp = clamp(base + o, ivec2(0), halfExt - 1);
+		ivec2 fp = min(hp * 2 + phase, full - 1);
+		float nz = texelFetch(inHiZ, fp, 0).r;
+		vec3 nn = octDecode(texelFetch(inViewNormals, fp, 0).rg * 2.0 - 1.0);
+		float b =
+			(o.x == 0 ? 1.0 - f.x : f.x) *
+			(o.y == 0 ? 1.0 - f.y : f.y);
+		float geometry =
+			exp2(-abs(nz - z) / max(z, 1e-4) * pc.upsampleDepthSigma) *
+			pow(max(dot(n, nn), 0.0), 8.0);
+		if (!aoFinite(geometry)) geometry = 0.0;
 
-void main() {
-	SceneData scene    = getSceneData();
-	DebugToggles debug = getDebugToggles();
+		// Preserve the original GI and bent-normal reconstruction weights.
+		float w = max(b, 1e-3) * geometry;
+		vec4 ba = texelFetch(inBentAOHalf, hp, 0);
+		bent += (ba.rgb * 2.0 - 1.0) * w;
+		ao += ba.a * w;
+		if (getDebugToggles().giMode == VBGI)
+			gi += texelFetch(inGIHalf, hp, 0) * w;
+		ws += w;
 
-	const ivec2 fullExtent = ivec2(scene.renderExtentSize.xy);
-	const ivec2 fullPix    = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(fullPix, fullExtent))) return;
-
-	const ivec2 fullMax = fullExtent - 1;
-	const ivec2 halfMax = (fullExtent + 1) / 2 - 1;
-	const ivec2 phase   = aoQuadPhase(scene.temporal.x, IsTAAEnabled());
-
-	const float centerZ = texelFetch(inHiZ, fullPix, 0).r;
-	const vec3  centerN = octDecode(texelFetch(inViewNormals, fullPix, 0).rg * 2.0 - 1.0);
-	const vec3  centerWSN = normalize(mat3(scene.invView) * centerN);
-
-	const vec2  hc   = (vec2(fullPix) - vec2(phase)) * 0.5;
-	const ivec2 base = ivec2(floor(hc));
-	const vec2  frac = hc - vec2(base);
-
-	vec4  accum   = vec4(0.0);
-	vec3  bentSum = vec3(0.0);
-	vec3  giSum   = vec3(0.0);
-	float wSum    = 0.0;
-
-	float bestW = -1.0;
-	vec4  bestS = vec4(centerWSN * 0.5 + 0.5, 1.0);
-	vec3  bestG = vec3(0.0);
-
-	const bool giOn = (debug.giMode == VBGI);
-
-	for (int i = 0; i < 4; ++i) {
-		ivec2 o       = ivec2(i & 1, i >> 1);
-		ivec2 halfPix = clamp(base + o, ivec2(0), halfMax);
-		ivec2 srcPix  = min(halfPix * 2 + phase, fullMax);
-
-		float z = texelFetch(inHiZ, srcPix, 0).r;
-		vec3  n = octDecode(texelFetch(inViewNormals, srcPix, 0).rg * 2.0 - 1.0);
-		vec4  s = texelFetch(inBentAOHalf, halfPix, 0);
-		vec3  g = giOn ? texelFetch(inGIHalf, halfPix, 0).rgb : vec3(0.0);
-
-		float bw = max((o.x == 0 ? 1.0 - frac.x : frac.x) *
-					   (o.y == 0 ? 1.0 - frac.y : frac.y), 1e-3);
-
-		float dz = abs(z - centerZ) / max(centerZ, 1e-4);
-		float nw = pow(saturate(dot(centerN, n)), 8.0);
-		float w  = bw * exp2(-dz * pc.upsampleDepthSigma) * nw;
-
-		accum   += s * w;
-		bentSum += (s.rgb * 2.0 - 1.0) * w;
-		giSum   += g * w;
-		wSum    += w;
-
-		if (w > bestW) { bestW = w; bestS = s; bestG = g; }
+		// Use genuine bilinear support, without the artificial weight floor.
+		// Do not normalize this by ws: one weak tap is not full confidence.
+		support += b * geometry;
 	}
 
-	vec4 result = (wSum > 1e-5) ? accum / wSum : bestS;
-	vec3 gi     = (wSum > 1e-5) ? giSum / wSum : bestG;
-
-	if (dot(bentSum, bentSum) > 1e-8) {
-		result.rgb = normalize(bentSum) * 0.5 + 0.5;
+	if (ws > 1e-6)
+	{
+		gi /= ws;
+		ao /= ws;
+	}
+	else
+	{
+		gi = vec4(0.0);
+		ao = 1.0;
+		support = 0.0;
 	}
 
-	imageStore(outBentAO, fullPix, result);
-	imageStore(outGI, fullPix, vec4(gi, 0.0));
+	float rawDepth = SampleTextureFetch(s.renderTargetIDs.depthResolvedID, p, 0).r;
+	if (!(rawDepth > 0.0) || !aoFinite(z) || z <= 0.0 || !aoFinite(ao))
+	{
+		ao = 1.0;
+		support = 0.0;
+	}
+
+	ao = clamp(ao, 0.0, 1.0);
+	support = clamp(support, 0.0, 1.0);
+	bent = dot(bent, bent) > 1e-8 ? normalize(bent) : wn;
+	imageStore(outBentAO, p, vec4(bent * 0.5 + 0.5, ao));
+	imageStore(outGI, p, gi);
+	imageStore(outAOReconstruction, p, vec4(ao, support, 0.0, 0.0));
 }

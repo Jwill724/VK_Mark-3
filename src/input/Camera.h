@@ -55,6 +55,10 @@ public:
 		return base_exposure;
 	}
 
+	float GetEV100() const {
+		return std::log2((m_aperture * m_aperture) / m_shutterSpeed * 100.0f / m_iso);
+	}
+
 	void SetPosition(const glm::vec3& pos) { m_position = pos; }
 	void SetVelocity(const glm::vec3& vel) { m_velocity = vel; }
 

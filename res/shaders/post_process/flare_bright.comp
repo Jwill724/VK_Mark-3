@@ -1,19 +1,35 @@
-#version 450
+#version 460
 
 #extension GL_ARB_separate_shader_objects : require
 #extension GL_GOOGLE_include_directive : require
 
 #include "../include/common.glsl"
+#include "../include/depth.glsl"
+#include "../include/froxel.glsl"
 #include "../include/pbr.glsl"
+
+const float kBrightThreshold = 1.0;
+const float kBrightKnee      = 0.5;
+const float kBrightClamp     = 256.0;
+
+const float kBrightClampDisplay = 12.0;
+
+const vec2 kBoxTaps[4] = vec2[4](
+	vec2(-1.0, -1.0), vec2(1.0, -1.0),
+	vec2(-1.0,  1.0), vec2(1.0,  1.0));
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(set = PUSH_SET, binding = PUSH_BINDING_READ_1) uniform sampler2D inSceneHDR;
-layout(set = PUSH_SET, binding = PUSH_BINDING_READ_2) uniform sampler2D inVolumetricLight;
+layout(set = PUSH_SET, binding = PUSH_BINDING_READ_2) uniform sampler3D froxelIntegrated;
 
 layout(set = PUSH_SET, binding = PUSH_BINDING_WRITE_1) writeonly uniform image2D outFlareBright;
 
 layout(push_constant) uniform LensFlarePush {
+	vec2 froxelClips;
+	uint fogEnabled;
+	float pad0;
+
 	vec2 outputRes;
 	vec2 invOutputRes;
 
@@ -21,10 +37,9 @@ layout(push_constant) uniform LensFlarePush {
 	float sunVisible;
 	uint rainbowLUTIndex;
 
-	float brightThreshold;
-	float brightKnee;
 	float brightIntensity;
 	float starburstIntensity;
+	float pad1[2];
 
 	float ringInnerRadius;
 	float ringOuterRadius;
@@ -52,12 +67,6 @@ layout(push_constant) uniform LensFlarePush {
 	float ghostSpacing;
 } pc;
 
-const float kBrightClampDisplay = 12.0;
-
-const vec2 kBoxTaps[4] = vec2[4](
-	vec2(-1.0, -1.0), vec2(1.0, -1.0),
-	vec2(-1.0,  1.0), vec2(1.0,  1.0));
-
 void main()
 {
 	ivec2 outDim = imageSize(outFlareBright);
@@ -72,30 +81,33 @@ void main()
 	vec2 uv = (vec2(outCoord) + 0.5) / vec2(outDim);
 
 	SceneData scene = getSceneData();
-	vec2 invFull = vec2(scene.displayPixelSizes.xy);
+	vec2 invFull = 1.0 / vec2(textureSize(inSceneHDR, 0));
 
 	// 4 bilinear taps at +-1 full-res texel = an exact 4x4 box over the quarter-res footprint
 	vec3 hdrScene = vec3(0.0);
 	for (int i = 0; i < 4; ++i)
+	{
 		hdrScene += textureLod(inSceneHDR, uv + kBoxTaps[i] * invFull, 0.0).rgb;
+	}
 	hdrScene *= 0.25;
 
-	hdrScene += textureLod(inVolumetricLight, uv, 0.0).rgb;
+	if (pc.fogEnabled != 0u)
+	{
+		vec4 fog = textureLod(froxelIntegrated,
+			vec3(uv, (float(FROXEL_Z) - 0.5) / float(FROXEL_Z)), 0.0);
 
-	float exposure = max(getLuminanceBuffer().luminanceSums[0].x, 1e-4);
-
-	float thresholdHdr = pc.brightThreshold / exposure;
-	float kneeHdr = pc.brightKnee / exposure;
+		hdrScene = hdrScene * fog.a + fog.rgb;
+	}
 
 	float sceneLum = luminance(hdrScene);
-	float amount = softThreshold(sceneLum, thresholdHdr, kneeHdr);
-	amount = min(amount, kBrightClampDisplay / exposure);
+	float amount = softThreshold(sceneLum, kBrightThreshold, kBrightKnee);
+	amount = min(amount, kBrightClamp);
 
 	vec3 brightColor = vec3(0.0);
-	if (amount > 0.0)
-		brightColor = hdrScene * (amount / max(sceneLum, 1e-6));
+	if (amount > 0.0 && sceneLum > 1e-6)
+		brightColor = hdrScene * (amount / sceneLum);
 
 	brightColor *= pc.brightIntensity;
 
-	imageStore(outFlareBright, outCoord, vec4(brightColor, 1.0));
+	imageStore(outFlareBright, outCoord, vec4(sanitizeHDR(brightColor, COLOR_HISTORY_MAX), 1.0));
 }

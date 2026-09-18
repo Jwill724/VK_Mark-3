@@ -31,7 +31,8 @@ public:
 		uint32_t threadSlotCount,
 		Device& device,
 		DescriptorManager& descriptorsManager,
-		Allocator& allocator);
+		Allocator& allocator,
+		VkDescriptorSet frameSet);
 	void Cleanup(const DeviceContext& deviceCtx, Allocator& allocator);
 
 	BindlessBDATable& GetBindlessBDATable() { return m_gpuAddressTable; }
@@ -197,6 +198,10 @@ public:
 
 	uint32_t GetFrameIndex() const noexcept { return m_frameIndex; }
 
+	bool IsLuminanceResetNeeded() const noexcept { return m_bLuminanceResetNeeded; }
+	void MarkLuminanceReset()     noexcept { m_bLuminanceResetNeeded = true; }
+	void ClearLuminanceResetFlag() noexcept { m_bLuminanceResetNeeded = false; }
+
 private:
 	uint32_t m_frameIndex = 0u;
 
@@ -273,7 +278,9 @@ private:
 	bool m_bClusterUniformWriteNeeded = false;
 	AllocatedBuffer m_clustered_UBO;
 
-	VkDescriptorSet m_frameSet = VK_NULL_HANDLE;
+	VkDescriptorSet m_frameSet = VK_NULL_HANDLE;\
+
+	bool m_bLuminanceResetNeeded = false;
 
 	void CreateTLAS(Device& device, Allocator& allocator);
 

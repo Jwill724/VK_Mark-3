@@ -1,4 +1,4 @@
-#version 450
+#version 460
 
 #extension GL_GOOGLE_include_directive : require
 #extension GL_ARB_separate_shader_objects : require
@@ -7,8 +7,6 @@
 #include "../include/culling.glsl"
 #include "../include/barycentric.glsl"
 #include "../include/visbuffer.glsl"
-
-// Utilizing pre-created bin lut for 
 
 layout(local_size_x = 256) in;
 
